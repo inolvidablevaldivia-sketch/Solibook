@@ -75,15 +75,19 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+const TIPOS_EVENTOS_BASE = [
+  'Ensayo',
+  'Presentación',
+  'Reunión',
+  'Administrativo',
+  'Otro'
+];
+
+const tiposUnicos = (tipos: string[]) => Array.from(new Set(tipos.filter(Boolean)));
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [integrantes, setIntegrantes] = useState<Integrante[]>([]);
-  const [tiposEventos, setTiposEventos] = useState<string[]>([
-    'Ensayo',
-    'Presentación',
-    'Reunión',
-    'Administrativo',
-    'Otro'
-  ]);
+  const [tiposEventos, setTiposEventos] = useState<string[]>(TIPOS_EVENTOS_BASE);
   const [eventos, setEventos] = useState<Evento[]>([]);
   const [asistencias, setAsistencias] = useState<AsistenciaRegistro[]>([]);
   const [cartas, setCartas] = useState<Carta[]>([]);
@@ -103,6 +107,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const storedInt = localStorage.getItem('solibook_integrantes');
       const storedEv = localStorage.getItem('solibook_eventos');
+      const storedTipos = localStorage.getItem('solibook_tipos_eventos');
       const storedAs = localStorage.getItem('solibook_asistencias');
       const storedCar = localStorage.getItem('solibook_cartas');
       const storedAct = localStorage.getItem('solibook_actas');
@@ -110,11 +115,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const storedNot = localStorage.getItem('solibook_notificaciones');
 
       const dataIntegrantes: Integrante[] = storedInt ? JSON.parse(storedInt) : INTEGRANTES_INICIALES;
+      const dataEventos: Evento[] = storedEv ? JSON.parse(storedEv) : EVENTOS_INICIALES;
+      const dataTipos: string[] = storedTipos ? JSON.parse(storedTipos) : TIPOS_EVENTOS_BASE;
       // Siempre ordenar alfabéticamente por defecto
       dataIntegrantes.sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
 
       setIntegrantes(dataIntegrantes);
-      setEventos(storedEv ? JSON.parse(storedEv) : EVENTOS_INICIALES);
+      setEventos(dataEventos);
+      setTiposEventos(tiposUnicos([...TIPOS_EVENTOS_BASE, ...dataTipos, ...dataEventos.map(e => e.tipo)]));
       setAsistencias(storedAs ? JSON.parse(storedAs) : ASISTENCIAS_INICIALES);
       setCartas(storedCar ? JSON.parse(storedCar) : CARTAS_INICIALES);
       setActas(storedAct ? JSON.parse(storedAct) : ACTAS_INICIALES);
@@ -124,6 +132,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const base = [...INTEGRANTES_INICIALES].sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
       setIntegrantes(base);
       setEventos(EVENTOS_INICIALES);
+      setTiposEventos(tiposUnicos([...TIPOS_EVENTOS_BASE, ...EVENTOS_INICIALES.map(e => e.tipo)]));
       setAsistencias(ASISTENCIAS_INICIALES);
       setCartas(CARTAS_INICIALES);
       setActas(ACTAS_INICIALES);
@@ -139,6 +148,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       localStorage.setItem('solibook_integrantes', JSON.stringify(integrantes));
       localStorage.setItem('solibook_eventos', JSON.stringify(eventos));
+      localStorage.setItem('solibook_tipos_eventos', JSON.stringify(tiposEventos));
       localStorage.setItem('solibook_asistencias', JSON.stringify(asistencias));
       localStorage.setItem('solibook_cartas', JSON.stringify(cartas));
       localStorage.setItem('solibook_actas', JSON.stringify(actas));
@@ -147,7 +157,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.error('Error persistiendo datos:', e);
     }
-  }, [integrantes, eventos, asistencias, cartas, actas, justificaciones, notificaciones, isLoaded]);
+  }, [integrantes, eventos, tiposEventos, asistencias, cartas, actas, justificaciones, notificaciones, isLoaded]);
 
   // Funciones de Integrantes
   const agregarIntegrante = (nuevo: Omit<Integrante, 'id'>) => {
