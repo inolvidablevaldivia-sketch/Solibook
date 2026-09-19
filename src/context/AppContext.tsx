@@ -41,6 +41,9 @@ interface AppContextType {
   asistencias: AsistenciaRegistro[];
   marcarAsistencia: (eventoId: string, integranteId: string, estado: EstadoAsistencia, motivo?: string) => void;
   marcarTodosPresentes: (eventoId: string, integrantesIds: string[]) => void;
+  marcarTodosEstado: (eventoId: string, integrantesIds: string[], estado: EstadoAsistencia) => void;
+  quitarDeLista: (eventoId: string, integranteId: string, convocadosActualesIds: string[]) => void;
+  agregarAListaEvento: (eventoId: string, integrantesIds: string[], convocadosActualesIds: string[]) => void;
   cerrarAsistenciaEvento: (eventoId: string) => void;
 
   // Cartas
@@ -288,6 +291,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const marcarTodosEstado = (eventoId: string, integrantesIds: string[], estado: EstadoAsistencia) => {
+    setAsistencias(prev => {
+      const filtered = prev.filter(a => a.eventoId !== eventoId);
+      const nuevos: AsistenciaRegistro[] = integrantesIds.map(id => ({
+        id: `as-${Date.now()}-${id}`,
+        eventoId,
+        integranteId: id,
+        estado,
+        horaMarcado: new Date().toISOString()
+      }));
+      return [...filtered, ...nuevos];
+    });
+  };
+
+  // Quita a un integrante de la convocatoria de un evento puntual.
+  // No elimina al miembro del directorio y deja de contar para estadísticas.
+  const quitarDeLista = (eventoId: string, integranteId: string, convocadosActualesIds: string[]) => {
+    const nuevaLista = convocadosActualesIds.filter(id => id !== integranteId);
+    setEventos(prev => prev.map(ev => ev.id === eventoId ? {
+      ...ev,
+      tipoConvocatoria: 'Personalizada',
+      cuerdasConvocadas: undefined,
+      integrantesConvocadosIds: nuevaLista
+    } : ev));
+    // Se borra cualquier marca previa para que no afecte estadísticas
+    setAsistencias(prev => prev.filter(a => !(a.eventoId === eventoId && a.integranteId === integranteId)));
+  };
+
+  // Suma integrantes a la convocatoria de un evento puntual (pasan a contar como citados)
+  const agregarAListaEvento = (eventoId: string, integrantesIds: string[], convocadosActualesIds: string[]) => {
+    const nuevaLista = Array.from(new Set([...convocadosActualesIds, ...integrantesIds]));
+    setEventos(prev => prev.map(ev => ev.id === eventoId ? {
+      ...ev,
+      tipoConvocatoria: 'Personalizada',
+      cuerdasConvocadas: undefined,
+      integrantesConvocadosIds: nuevaLista
+    } : ev));
+  };
+
   const cerrarAsistenciaEvento = (eventoId: string) => {
     setEventos(prev => prev.map(ev => ev.id === eventoId ? { ...ev, asistenciaFinalizada: true } : ev));
   };
@@ -487,6 +529,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         asistencias,
         marcarAsistencia,
         marcarTodosPresentes,
+        marcarTodosEstado,
+        quitarDeLista,
+        agregarAListaEvento,
         cerrarAsistenciaEvento,
         cartas,
         agregarCarta,

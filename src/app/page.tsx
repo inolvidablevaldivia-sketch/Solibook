@@ -16,6 +16,7 @@ export default function Home() {
   const [vistaActual, setVistaActual] = useState<string>('agenda');
   const [eventoParaAsistencia, setEventoParaAsistencia] = useState<string | undefined>(undefined);
   const [modalNotificacionesAbierto, setModalNotificacionesAbierto] = useState(false);
+  const [solicitarNuevoEvento, setSolicitarNuevoEvento] = useState(0);
 
   const irAPasarLista = (eventoId: string) => {
     setEventoParaAsistencia(eventoId);
@@ -35,13 +36,20 @@ export default function Home() {
         {/* Contenedor Principal */}
         <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-5">
           {vistaActual === 'agenda' && (
-            <VistaAgenda onIniciarAsistencia={irAPasarLista} />
+            <VistaAgenda onIniciarAsistencia={irAPasarLista} solicitarNuevoEvento={solicitarNuevoEvento} />
           )}
 
           {vistaActual === 'asistencia' && (
             <VistaAsistencia
               eventoIdInicial={eventoParaAsistencia}
-              onVolver={() => setVistaActual('agenda')}
+              onVolver={() => {
+                setEventoParaAsistencia(undefined);
+                setVistaActual('agenda');
+              }}
+              onCrearEvento={() => {
+                setSolicitarNuevoEvento(n => n + 1);
+                setVistaActual('agenda');
+              }}
             />
           )}
 

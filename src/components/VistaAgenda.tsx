@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Evento, TipoConvocatoria, Cuerda } from '@/types';
 import {
@@ -28,9 +28,10 @@ import {
 
 interface VistaAgendaProps {
   onIniciarAsistencia: (eventoId: string) => void;
+  solicitarNuevoEvento?: number;
 }
 
-export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia }) => {
+export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, solicitarNuevoEvento }) => {
   const {
     eventos,
     tiposEventos,
@@ -49,6 +50,14 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
   const [modalNuevoEvento, setModalNuevoEvento] = useState(false);
   const [modalEditarEvento, setModalEditarEvento] = useState<Evento | null>(null);
   const [modalArmarListaPendiente, setModalArmarListaPendiente] = useState<Evento | null>(null);
+
+  // Permite abrir el modal de nueva actividad desde otras secciones (ej. Asistencia)
+  useEffect(() => {
+    if (solicitarNuevoEvento) {
+      setEsPeriodico(false);
+      setModalNuevoEvento(true);
+    }
+  }, [solicitarNuevoEvento]);
   const [copiadoToast, setCopiadoToast] = useState(false);
 
   // Navegación de Mes y Año para Calendario y Lista
