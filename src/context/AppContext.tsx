@@ -30,10 +30,12 @@ interface AppContextType {
 
   // Eventos / Agenda
   eventos: Evento[];
+  tiposEventos: string[];
+  agregarTipoEvento: (tipo: string) => void;
   agregarEvento: (nuevo: Omit<Evento, 'id'>) => string;
   agregarEventosLote: (nuevos: Omit<Evento, 'id'>[]) => void;
-  actualizarEvento: (id: string, datos: Partial<Evento>) => void;
-  eliminarEvento: (id: string, borrarTodoElGrupo?: boolean) => void;
+  actualizarEvento: (id: string, datos: Partial<Evento>, editarFuturosDelGrupo?: boolean) => void;
+  eliminarEvento: (id: string, borrarFuturosDelGrupo?: boolean) => void;
 
   // Asistencias
   asistencias: AsistenciaRegistro[];
@@ -75,6 +77,13 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [integrantes, setIntegrantes] = useState<Integrante[]>([]);
+  const [tiposEventos, setTiposEventos] = useState<string[]>([
+    'Ensayo',
+    'Presentación',
+    'Reunión',
+    'Administrativo',
+    'Otro'
+  ]);
   const [eventos, setEventos] = useState<Evento[]>([]);
   const [asistencias, setAsistencias] = useState<AsistenciaRegistro[]>([]);
   const [cartas, setCartas] = useState<Carta[]>([]);
@@ -172,16 +181,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setEventos(prev => [ ...listos, ...prev ]);
   };
 
-  const actualizarEvento = (id: string, datos: Partial<Evento>) => {
-    setEventos(prev => prev.map(item => item.id === id ? { ...item, ...datos } : item));
+  const agregarTipoEvento = (tipo: string) => {
+    const limpio = tipo.trim();
+    if (limpio && !tiposEventos.includes(limpio)) {
+      setTiposEventos(prev => [...prev, limpio]);
+    }
   };
 
-  const eliminarEvento = (id: string, borrarTodoElGrupo: boolean = false) => {
+  const actualizarEvento = (id: string, datos: Partial<Evento>, editarFuturosDelGrupo: boolean = false) => {
     setEventos(prev => {
       const objetivo = prev.find(e => e.id === id);
       if (!objetivo) return prev;
-      if (borrarTodoElGrupo && objetivo.grupoRecurrenciaId) {
-        return prev.filter(e => e.grupoRecurrenciaId !== objetivo.grupoRecurrenciaId);
+
+      if (editarFuturosDelGrupo && objetivo.grupoRecurrenciaId) {
+        const fechaObjetivo = new Date(objetivo.fechaHoraInicio).getTime();
+        return prev.map(item => {
+          if (
+            item.grupoRecurrenciaId === objetivo.grupoRecurrenciaId &&
+            new Date(item.fechaHoraInicio).getTime() >= fechaObjetivo
+          ) {
+            // Actualizar campos preservando la fecha particular de cada uno
+            let nuevaFechaHora = item.fechaHoraInicio;
+            if (datos.fechaHoraInicio) {
+              const horaNueva = datos.fechaHoraInicio.split('T')[1];
+              const fechaBase = item.fechaHoraInicio.split('T')[0];
+              nuevaFechaHora = `${fechaBase}T${horaNueva}`;
+            }
+            return { ...item, ...datos, fechaHoraInicio: nuevaFechaHora };
+          }
+          return item;
+        });
+      }
+
+      return prev.map(item => item.id === id ? { ...item, ...datos } : item);
+    });
+  };
+
+  const eliminarEvento = (id: string, borrarFuturosDelGrupo: boolean = false) => {
+    setEventos(prev => {
+      const objetivo = prev.find(e => e.id === id);
+      if (!objetivo) return prev;
+      if (borrarFuturosDelGrupo && objetivo.grupoRecurrenciaId) {
+        const fechaObjetivo = new Date(objetivo.fechaHoraInicio).getTime();
+        return prev.filter(e => {
+          // Solo borrar si es del mismo grupo y su fecha es mayor o igual a la actual
+          if (e.grupoRecurrenciaId === objetivo.grupoRecurrenciaId) {
+            return new Date(e.fechaHoraInicio).getTime() < fechaObjetivo;
+          }
+          return true;
+        });
       }
       return prev.filter(e => e.id !== id);
     });
@@ -420,6 +468,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         actualizarIntegrante,
         eliminarIntegrante,
         eventos,
+        tiposEventos,
+        agregarTipoEvento,
         agregarEvento,
         agregarEventosLote,
         actualizarEvento,

@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
-import { Evento, TipoEvento, TipoConvocatoria, Cuerda } from '@/types';
+import { Evento, TipoConvocatoria, Cuerda } from '@/types';
 import {
   Calendar,
   Clock,
@@ -12,6 +12,7 @@ import {
   Plus,
   CheckCircle2,
   ChevronRight,
+  ChevronLeft,
   Filter,
   FileCheck,
   X,
@@ -20,7 +21,9 @@ import {
   Repeat,
   CheckSquare,
   Square,
-  CalendarDays
+  CalendarDays,
+  Edit2,
+  ListPlus
 } from 'lucide-react';
 
 interface VistaAgendaProps {
@@ -28,18 +31,34 @@ interface VistaAgendaProps {
 }
 
 export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia }) => {
-  const { eventos, agregarEvento, agregarEventosLote, eliminarEvento, integrantes } = useApp();
+  const {
+    eventos,
+    tiposEventos,
+    agregarTipoEvento,
+    agregarEvento,
+    agregarEventosLote,
+    actualizarEvento,
+    eliminarEvento,
+    integrantes
+  } = useApp();
 
   const [modoVista, setModoVista] = useState<'lista' | 'calendario'>('lista');
   const [filtroTipo, setFiltroTipo] = useState<string>('Todos');
   const [eventoSeleccionado, setEventoSeleccionado] = useState<Evento | null>(null);
   const [eventosDelDiaModal, setEventosDelDiaModal] = useState<{ fecha: string; eventos: Evento[] } | null>(null);
   const [modalNuevoEvento, setModalNuevoEvento] = useState(false);
+  const [modalEditarEvento, setModalEditarEvento] = useState<Evento | null>(null);
+  const [modalArmarListaPendiente, setModalArmarListaPendiente] = useState<Evento | null>(null);
   const [copiadoToast, setCopiadoToast] = useState(false);
+
+  // Navegación de Mes y Año para Calendario y Lista
+  const [fechaActualNavegacion, setFechaActualNavegacion] = useState(new Date(2026, 8, 1)); // Septiembre 2026
 
   // Formulario nuevo evento
   const [nuevoTitulo, setNuevoTitulo] = useState('');
-  const [nuevoTipo, setNuevoTipo] = useState<TipoEvento>('Ensayo');
+  const [nuevoTipo, setNuevoTipo] = useState<string>('Ensayo');
+  const [mostrarCrearTipo, setMostrarCrearTipo] = useState(false);
+  const [textoNuevoTipo, setTextoNuevoTipo] = useState('');
   const [nuevaHora, setNuevaHora] = useState('19:30');
   const [nuevoLugar, setNuevoLugar] = useState('Templo Central');
   const [nuevaDireccion, setNuevaDireccion] = useState('');
@@ -47,14 +66,22 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
   const [nuevaConvocatoria, setNuevaConvocatoria] = useState<TipoConvocatoria>('Todos');
   const [cuerdasElegidas, setCuerdasElegidas] = useState<Cuerda[]>([]);
   const [miembrosElegidosIds, setMiembrosElegidosIds] = useState<string[]>([]);
+  const [dejarListaPendiente, setDejarListaPendiente] = useState(false);
 
   // Opciones Periódicas / Rango
   const [esPeriodico, setEsPeriodico] = useState(false);
   const [fechaUnica, setFechaUnica] = useState(new Date().toISOString().split('T')[0]);
   const [fechaRangoInicio, setFechaRangoInicio] = useState(new Date().toISOString().split('T')[0]);
   const [fechaRangoFin, setFechaRangoFin] = useState('');
-  // Días de la semana: 0 = Dom, 1 = Lun, 2 = Mar, 3 = Mié, 4 = Jue, 5 = Vie, 6 = Sáb
-  const [diasSemanaElegidos, setDiasSemanaElegidos] = useState<number[]>([5]); // Viernes por defecto
+  const [diasSemanaElegidos, setDiasSemanaElegidos] = useState<number[]>([5]);
+
+  // Formulario Editar Evento
+  const [editTitulo, setEditTitulo] = useState('');
+  const [editHora, setEditHora] = useState('');
+  const [editLugar, setEditLugar] = useState('');
+  const [editDireccion, setEditDireccion] = useState('');
+  const [editNotas, setEditNotas] = useState('');
+  const [editAlcance, setEditAlcance] = useState<'soloEste' | 'futuros'>('soloEste');
 
   const diasSemana = [
     { num: 1, label: 'L', full: 'Lunes' },
@@ -72,12 +99,33 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
     .filter(i => i.estado === 'Activo')
     .sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
 
+  // Navegar mes anterior / siguiente
+  const mesAnterior = () => {
+    setFechaActualNavegacion(new Date(fechaActualNavegacion.getFullYear(), fechaActualNavegacion.getMonth() - 1, 1));
+  };
+
+  const mesSiguiente = () => {
+    setFechaActualNavegacion(new Date(fechaActualNavegacion.getFullYear(), fechaActualNavegacion.getMonth() + 1, 1));
+  };
+
+  const mesNombre = fechaActualNavegacion.toLocaleDateString('es-CL', { month: 'long', year: 'numeric' });
+  const anioActual = fechaActualNavegacion.getFullYear();
+  const mesActual = fechaActualNavegacion.getMonth();
+
+  // Filtrado de eventos del mes actual en vista calendario y en lista según filtro
   const eventosFiltrados = eventos
     .filter(ev => {
-      if (filtroTipo === 'Todos') return true;
-      return ev.tipo === filtroTipo;
+      if (filtroTipo !== 'Todos' && ev.tipo !== filtroTipo) return false;
+      const f = new Date(ev.fechaHoraInicio);
+      return f.getFullYear() === anioActual && f.getMonth() === mesActual;
     })
     .sort((a, b) => new Date(a.fechaHoraInicio).getTime() - new Date(b.fechaHoraInicio).getTime());
+
+  // Generador de Días del Mes para el Calendario
+  const totalDiasMes = new Date(anioActual, mesActual + 1, 0).getDate();
+  const primerDiaSemana = new Date(anioActual, mesActual, 1).getDay(); // 0 = Dom
+  // Ajuste para semana comenzando en Lunes (0 = Lun ... 6 = Dom)
+  const desfaseLunes = (primerDiaSemana + 6) % 7;
 
   // Generador de Texto para WhatsApp (Regla: solo campos existentes)
   const copiarParaWhatsApp = (ev: Evento) => {
@@ -101,8 +149,12 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
       texto += `👥 Convocados: Todo el ministerio\n`;
     } else if (ev.tipoConvocatoria === 'Por Cuerda' && ev.cuerdasConvocadas) {
       texto += `👥 Convocados: ${ev.cuerdasConvocadas.join(', ')}\n`;
-    } else if (ev.tipoConvocatoria === 'Personalizada' && ev.integrantesConvocadosIds) {
-      texto += `👥 Convocados: Citación especial (${ev.integrantesConvocadosIds.length} integrantes)\n`;
+    } else if (ev.tipoConvocatoria === 'Personalizada') {
+      if (ev.integrantesConvocadosIds && ev.integrantesConvocadosIds.length > 0) {
+        texto += `👥 Convocados: Citación especial (${ev.integrantesConvocadosIds.length} integrantes)\n`;
+      } else {
+        texto += `👥 Convocados: Citación especial (Lista pendiente de confirmación)\n`;
+      }
     }
 
     if (ev.notas && ev.notas.trim() !== '') {
@@ -121,23 +173,30 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
     e.preventDefault();
     if (!nuevoTitulo) return;
 
+    let tipoFinal = nuevoTipo;
+    if (mostrarCrearTipo && textoNuevoTipo.trim()) {
+      tipoFinal = textoNuevoTipo.trim();
+      agregarTipoEvento(tipoFinal);
+    }
+
+    const convocadosIdsFinal = nuevaConvocatoria === 'Personalizada' && !dejarListaPendiente ? miembrosElegidosIds : undefined;
+
     if (!esPeriodico) {
       if (!fechaUnica) return;
       const fechaHora = `${fechaUnica}T${nuevaHora || '19:30'}:00`;
       agregarEvento({
         titulo: nuevoTitulo,
-        tipo: nuevoTipo,
+        tipo: tipoFinal,
         fechaHoraInicio: fechaHora,
         lugarNombre: nuevoLugar,
         direccion: nuevaDireccion,
         notas: nuevasNotas,
         tipoConvocatoria: nuevaConvocatoria,
         cuerdasConvocadas: nuevaConvocatoria === 'Por Cuerda' ? cuerdasElegidas : undefined,
-        integrantesConvocadosIds: nuevaConvocatoria === 'Personalizada' ? miembrosElegidosIds : undefined,
+        integrantesConvocadosIds: convocadosIdsFinal,
         asistenciaFinalizada: false
       });
     } else {
-      // Periódico con rango
       if (!fechaRangoInicio || !fechaRangoFin || diasSemanaElegidos.length === 0) {
         alert('Por favor selecciona la fecha de inicio, fecha de fin y al menos un día de la semana.');
         return;
@@ -165,14 +224,14 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
 
           listaGenerada.push({
             titulo: nuevoTitulo,
-            tipo: nuevoTipo,
+            tipo: tipoFinal,
             fechaHoraInicio: fechaStr,
             lugarNombre: nuevoLugar,
             direccion: nuevaDireccion,
             notas: nuevasNotas,
             tipoConvocatoria: nuevaConvocatoria,
             cuerdasConvocadas: nuevaConvocatoria === 'Por Cuerda' ? cuerdasElegidas : undefined,
-            integrantesConvocadosIds: nuevaConvocatoria === 'Personalizada' ? miembrosElegidosIds : undefined,
+            integrantesConvocadosIds: convocadosIdsFinal,
             asistenciaFinalizada: false,
             grupoRecurrenciaId: grupoId
           });
@@ -190,30 +249,73 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
     }
 
     setModalNuevoEvento(false);
-    // Limpiar form
     setNuevoTitulo('');
     setNuevaDireccion('');
     setNuevasNotas('');
     setEsPeriodico(false);
     setMiembrosElegidosIds([]);
+    setDejarListaPendiente(false);
+    setMostrarCrearTipo(false);
+    setTextoNuevoTipo('');
   };
 
-  // Click en día del Calendario
+  // Abrir formulario para un día específico (vía clic en día vacío o con eventos)
   const handleDiaCalendarioClick = (dia: number) => {
-    // Buscar todos los eventos que caen en ese día (Septiembre 2026)
     const eventosDia = eventosFiltrados.filter(ev => {
       const f = new Date(ev.fechaHoraInicio);
       return f.getDate() === dia;
     });
 
-    if (eventosDia.length === 1) {
+    if (eventosDia.length === 0) {
+      // Día vacío: abrir directamente el modal para programar una actividad en esa fecha
+      const mesStr = String(mesActual + 1).padStart(2, '0');
+      const diaStr = String(dia).padStart(2, '0');
+      setFechaUnica(`${anioActual}-${mesStr}-${diaStr}`);
+      setEsPeriodico(false);
+      setModalNuevoEvento(true);
+    } else if (eventosDia.length === 1) {
       setEventoSeleccionado(eventosDia[0]);
-    } else if (eventosDia.length > 1) {
+    } else {
       setEventosDelDiaModal({
-        fecha: `${dia} de Septiembre 2026`,
+        fecha: `${dia} de ${mesNombre}`,
         eventos: eventosDia
       });
     }
+  };
+
+  // Abrir Modal de Edición
+  const abrirEditar = (ev: Evento) => {
+    setModalEditarEvento(ev);
+    setEditTitulo(ev.titulo);
+    setEditHora(new Date(ev.fechaHoraInicio).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    setEditLugar(ev.lugarNombre);
+    setEditDireccion(ev.direccion || '');
+    setEditNotas(ev.notas || '');
+    setEditAlcance('soloEste');
+  };
+
+  const handleGuardarEdicion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalEditarEvento) return;
+
+    const fechaBase = modalEditarEvento.fechaHoraInicio.split('T')[0];
+    const nuevaFechaHora = `${fechaBase}T${editHora || '19:30'}:00`;
+
+    actualizarEvento(
+      modalEditarEvento.id,
+      {
+        titulo: editTitulo,
+        fechaHoraInicio: nuevaFechaHora,
+        lugarNombre: editLugar,
+        direccion: editDireccion,
+        notas: editNotas
+      },
+      editAlcance === 'futuros'
+    );
+
+    setModalEditarEvento(null);
+    setEventoSeleccionado(null);
+    alert(editAlcance === 'futuros' ? '¡Se actualizaron este evento y todos los futuros de la serie!' : '¡Evento actualizado con éxito!');
   };
 
   return (
@@ -226,11 +328,68 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
         </div>
       )}
 
-      {/* Barra de Filtros y Selector de Vistas */}
-      <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex flex-wrap items-center justify-between gap-3">
-        {/* Selector de tipo */}
-        <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-medium">
-          {['Todos', 'Ensayo', 'Presentación', 'Reunión', 'Administrativo'].map(tipo => (
+      {/* Barra de Filtros, Navegación de Mes y Acciones */}
+      <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Navegación de Meses y Años (Pasado y Futuro) */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={mesAnterior}
+              className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+              title="Mes anterior"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <h2 className="text-sm font-bold text-slate-900 capitalize min-w-[150px] text-center">
+              {mesNombre}
+            </h2>
+            <button
+              onClick={mesSiguiente}
+              className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+              title="Mes siguiente"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Alternar Lista/Calendario + Botón Nueva Actividad */}
+          <div className="flex items-center gap-2">
+            <div className="bg-slate-100 p-0.5 rounded-xl flex items-center text-xs">
+              <button
+                onClick={() => setModoVista('lista')}
+                className={`px-2.5 py-1 rounded-lg transition-all ${
+                  modoVista === 'lista' ? 'bg-white text-slate-900 font-semibold shadow-xs' : 'text-slate-500'
+                }`}
+              >
+                Lista
+              </button>
+              <button
+                onClick={() => setModoVista('calendario')}
+                className={`px-2.5 py-1 rounded-lg transition-all ${
+                  modoVista === 'calendario' ? 'bg-white text-slate-900 font-semibold shadow-xs' : 'text-slate-500'
+                }`}
+              >
+                Calendario
+              </button>
+            </div>
+
+            <button
+              onClick={() => {
+                setFechaUnica(new Date().toISOString().split('T')[0]);
+                setEsPeriodico(false);
+                setModalNuevoEvento(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Nueva Actividad</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Filtros de Tipo */}
+        <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-medium pt-1 border-t border-slate-100">
+          {['Todos', ...tiposEventos].map(tipo => (
             <button
               key={tipo}
               onClick={() => setFiltroTipo(tipo)}
@@ -244,45 +403,15 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
             </button>
           ))}
         </div>
-
-        {/* Acciones: Alternar Lista/Calendario + Botón Nuevo */}
-        <div className="flex items-center gap-2">
-          <div className="bg-slate-100 p-0.5 rounded-xl flex items-center text-xs">
-            <button
-              onClick={() => setModoVista('lista')}
-              className={`px-2.5 py-1 rounded-lg transition-all ${
-                modoVista === 'lista' ? 'bg-white text-slate-900 font-semibold shadow-xs' : 'text-slate-500'
-              }`}
-            >
-              Lista
-            </button>
-            <button
-              onClick={() => setModoVista('calendario')}
-              className={`px-2.5 py-1 rounded-lg transition-all ${
-                modoVista === 'calendario' ? 'bg-white text-slate-900 font-semibold shadow-xs' : 'text-slate-500'
-              }`}
-            >
-              Calendario
-            </button>
-          </div>
-
-          <button
-            onClick={() => setModalNuevoEvento(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Nueva Actividad</span>
-          </button>
-        </div>
       </div>
 
-      {/* VISTA AGENDA (Lista Cronológica Móvil Limpia) */}
+      {/* VISTA AGENDA (Lista Cronológica) */}
       {modoVista === 'lista' ? (
         <div className="space-y-3">
           {eventosFiltrados.length === 0 ? (
             <div className="bg-white rounded-2xl p-10 text-center border border-dashed border-slate-300">
               <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-slate-700">No hay eventos programados</p>
+              <p className="text-sm font-semibold text-slate-700">No hay actividades en {mesNombre}</p>
               <p className="text-xs text-slate-400 mt-1">Crea una nueva actividad usando el botón superior.</p>
             </div>
           ) : (
@@ -292,6 +421,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
               const diaNumero = fecha.getDate();
               const mes = fecha.toLocaleDateString('es-CL', { month: 'short' }).toUpperCase();
               const hora = fecha.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+              const tieneListaPendiente = ev.tipoConvocatoria === 'Personalizada' && (!ev.integrantesConvocadosIds || ev.integrantesConvocadosIds.length === 0);
 
               return (
                 <div
@@ -325,6 +455,11 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                           <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.2 rounded font-semibold flex items-center gap-0.5">
                             <Repeat className="w-2.5 h-2.5" />
                             Periódico
+                          </span>
+                        )}
+                        {tieneListaPendiente && (
+                          <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded font-bold border border-amber-200">
+                            Lista de citados pendiente
                           </span>
                         )}
                         {ev.asistenciaFinalizada && (
@@ -378,15 +513,24 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
         /* VISTA CALENDARIO MENSUAL */
         <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs">
           <div className="text-center mb-4">
-            <h3 className="text-sm font-bold text-slate-800">Septiembre 2026</h3>
-            <p className="text-xs text-slate-400">Toca cualquier fecha con punto para ver los detalles de las actividades</p>
+            <h3 className="text-sm font-bold text-slate-800 capitalize">{mesNombre}</h3>
+            <p className="text-xs text-slate-400">
+              Haz clic en cualquier día con punto para ver actividades, o en un día vacío para agregar una
+            </p>
           </div>
 
           <div className="grid grid-cols-7 gap-1.5 text-center text-xs">
             {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
               <div key={d} className="font-bold text-slate-400 py-1">{d}</div>
             ))}
-            {Array.from({ length: 30 }, (_, i) => {
+
+            {/* Espacios vacíos antes del primer día del mes */}
+            {Array.from({ length: desfaseLunes }).map((_, i) => (
+              <div key={`empty-${i}`} className="p-2 min-h-[56px] border border-transparent" />
+            ))}
+
+            {/* Días del mes actual */}
+            {Array.from({ length: totalDiasMes }, (_, i) => {
               const dia = i + 1;
               const eventosDia = eventosFiltrados.filter(ev => {
                 const f = new Date(ev.fechaHoraInicio);
@@ -397,21 +541,24 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
               return (
                 <div
                   key={dia}
-                  onClick={() => cantidad > 0 && handleDiaCalendarioClick(dia)}
-                  className={`p-2 rounded-xl border flex flex-col items-center justify-center min-h-[56px] transition-all ${
+                  onClick={() => handleDiaCalendarioClick(dia)}
+                  className={`p-2 rounded-xl border flex flex-col items-center justify-center min-h-[56px] transition-all cursor-pointer ${
                     cantidad > 0
-                      ? 'bg-sky-50/70 border-sky-300 text-[#0077B6] font-bold shadow-xs cursor-pointer hover:scale-105'
-                      : 'border-slate-100 hover:bg-slate-50 text-slate-700'
+                      ? 'bg-sky-50/70 border-sky-300 text-[#0077B6] font-bold shadow-xs hover:scale-105'
+                      : 'border-slate-100 hover:bg-slate-100/70 text-slate-700'
                   }`}
+                  title={cantidad === 0 ? 'Clic para programar actividad este día' : `${cantidad} actividades`}
                 >
                   <span>{dia}</span>
-                  {cantidad > 0 && (
+                  {cantidad > 0 ? (
                     <div className="flex items-center gap-0.5 mt-1">
                       {Array.from({ length: Math.min(cantidad, 3) }).map((_, dotIdx) => (
                         <span key={dotIdx} className="w-1.5 h-1.5 rounded-full bg-[#0099DD]" />
                       ))}
                       {cantidad > 3 && <span className="text-[9px] text-[#0099DD] font-bold">+</span>}
                     </div>
+                  ) : (
+                    <span className="text-[9px] text-slate-300 opacity-0 hover:opacity-100 mt-1 font-semibold">+</span>
                   )}
                 </div>
               );
@@ -442,12 +589,21 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                     {eventoSeleccionado.titulo}
                   </h3>
                 </div>
-                <button
-                  onClick={() => setEventoSeleccionado(null)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => abrirEditar(eventoSeleccionado)}
+                    className="p-1.5 text-slate-400 hover:text-[#0099DD] hover:bg-sky-50 rounded-lg transition-colors"
+                    title="Editar detalles del evento"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setEventoSeleccionado(null)}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-2.5 text-xs text-slate-600 bg-slate-50 p-3.5 rounded-xl border border-slate-100">
@@ -480,18 +636,31 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                     {eventoSeleccionado.direccion}
                   </div>
                 )}
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-slate-400" />
-                  <span>
-                    Convocatoria:{' '}
-                    <strong>
-                      {eventoSeleccionado.tipoConvocatoria === 'Todos'
-                        ? 'Todo el ministerio'
-                        : eventoSeleccionado.tipoConvocatoria === 'Por Cuerda'
-                        ? eventoSeleccionado.cuerdasConvocadas?.join(', ')
-                        : `Personalizada (${eventoSeleccionado.integrantesConvocadosIds?.length || 0} integrantes)`}
-                    </strong>
-                  </span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-slate-400" />
+                    <span>
+                      Convocatoria:{' '}
+                      <strong>
+                        {eventoSeleccionado.tipoConvocatoria === 'Todos'
+                          ? 'Todo el ministerio'
+                          : eventoSeleccionado.tipoConvocatoria === 'Por Cuerda'
+                          ? eventoSeleccionado.cuerdasConvocadas?.join(', ')
+                          : eventoSeleccionado.integrantesConvocadosIds && eventoSeleccionado.integrantesConvocadosIds.length > 0
+                          ? `Personalizada (${eventoSeleccionado.integrantesConvocadosIds.length} citados)`
+                          : 'Personalizada (Lista pendiente)'}
+                      </strong>
+                    </span>
+                  </div>
+                  {eventoSeleccionado.tipoConvocatoria === 'Personalizada' && (
+                    <button
+                      onClick={() => setModalArmarListaPendiente(eventoSeleccionado)}
+                      className="text-[11px] text-[#0099DD] font-bold hover:underline flex items-center gap-1"
+                    >
+                      <ListPlus className="w-3.5 h-3.5" />
+                      Armar Lista
+                    </button>
+                  )}
                 </div>
                 {eventoSeleccionado.notas && (
                   <div className="pt-2 border-t border-slate-200/60 text-slate-700 italic">
@@ -522,7 +691,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                 </button>
               </div>
 
-              {/* Opciones de Eliminación (Solo este día o todos los periódicos) */}
+              {/* Opciones de Eliminación (Solo este día o todos los futuros) */}
               <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
                 <button
                   onClick={() => {
@@ -540,7 +709,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                 {eventoSeleccionado.grupoRecurrenciaId && (
                   <button
                     onClick={() => {
-                      if (confirm('¿Deseas borrar TODOS los eventos que se crearon juntos en este período? (Los de otras programaciones permanecerán intactos)')) {
+                      if (confirm('¿Deseas borrar TODOS los eventos FUTUROS de este grupo? Los eventos que ya pasaron permanecerán intactos en el historial.')) {
                         eliminarEvento(eventoSeleccionado.id, true);
                         setEventoSeleccionado(null);
                       }
@@ -548,7 +717,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                     className="text-purple-700 hover:underline font-bold flex items-center gap-1"
                   >
                     <Repeat className="w-3.5 h-3.5" />
-                    Borrar todos los programados
+                    Borrar todos los futuros
                   </button>
                 )}
               </div>
@@ -596,6 +765,180 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
         </div>
       )}
 
+      {/* MODAL EDITAR EVENTO (SOLO ESTE O FUTUROS) */}
+      {modalEditarEvento && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-md overflow-hidden">
+            <form onSubmit={handleGuardarEdicion} className="p-5 space-y-3.5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                <h3 className="text-base font-bold text-slate-900">Editar Actividad</h3>
+                <button type="button" onClick={() => setModalEditarEvento(null)} className="text-slate-400">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Título</label>
+                <input
+                  type="text"
+                  required
+                  value={editTitulo}
+                  onChange={e => setEditTitulo(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Hora</label>
+                  <input
+                    type="time"
+                    value={editHora}
+                    onChange={e => setEditHora(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Lugar</label>
+                  <input
+                    type="text"
+                    value={editLugar}
+                    onChange={e => setEditLugar(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Dirección (opcional)</label>
+                <input
+                  type="text"
+                  value={editDireccion}
+                  onChange={e => setEditDireccion(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none"
+                />
+              </div>
+
+              {/* Alcance de edición: ¿Solo este día o todos los futuros del grupo? */}
+              {modalEditarEvento.grupoRecurrenciaId && (
+                <div className="bg-purple-50 p-3 rounded-xl border border-purple-200 space-y-2">
+                  <span className="text-xs font-bold text-purple-900 block">Alcance de los cambios:</span>
+                  <div className="space-y-1.5 text-xs text-purple-800">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="alcance"
+                        value="soloEste"
+                        checked={editAlcance === 'soloEste'}
+                        onChange={() => setEditAlcance('soloEste')}
+                      />
+                      <span>Editar solo este día</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="alcance"
+                        value="futuros"
+                        checked={editAlcance === 'futuros'}
+                        onChange={() => setEditAlcance('futuros')}
+                      />
+                      <span>Editar este día y todos los futuros programados</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setModalEditarEvento(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-semibold bg-[#0099DD] hover:bg-[#0088cc] text-white rounded-xl shadow-xs"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ARMAR LISTA DE CONVOCATORIA PENDIENTE */}
+      {modalArmarListaPendiente && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-md overflow-hidden p-5 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Armar Lista de Convocatoria</h3>
+                <p className="text-xs text-slate-500">{modalArmarListaPendiente.titulo}</p>
+              </div>
+              <button onClick={() => setModalArmarListaPendiente(null)} className="text-slate-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="max-h-60 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200/70">
+              {integrantesActivos.map(i => {
+                const listActual = modalArmarListaPendiente.integrantesConvocadosIds || [];
+                const marcado = listActual.includes(i.id);
+                return (
+                  <div
+                    key={i.id}
+                    onClick={() => {
+                      const nuevoArray = marcado
+                        ? listActual.filter(id => id !== i.id)
+                        : [...listActual, i.id];
+                      setModalArmarListaPendiente({
+                        ...modalArmarListaPendiente,
+                        integrantesConvocadosIds: nuevoArray
+                      });
+                    }}
+                    className="flex items-center justify-between p-2 hover:bg-white rounded-lg cursor-pointer text-xs"
+                  >
+                    <span className="font-medium text-slate-800">{i.nombreCompleto}</span>
+                    <span className="text-[10px] text-slate-400 font-semibold">{i.cuerda}</span>
+                    {marcado ? (
+                      <CheckSquare className="w-4 h-4 text-[#0099DD]" />
+                    ) : (
+                      <Square className="w-4 h-4 text-slate-300" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setModalArmarListaPendiente(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  actualizarEvento(modalArmarListaPendiente.id, {
+                    integrantesConvocadosIds: modalArmarListaPendiente.integrantesConvocadosIds
+                  });
+                  setEventoSeleccionado(modalArmarListaPendiente);
+                  setModalArmarListaPendiente(null);
+                  alert('¡Lista de convocatoria guardada con éxito!');
+                }}
+                className="px-4 py-2 text-xs font-semibold bg-[#0099DD] hover:bg-[#0088cc] text-white rounded-xl shadow-xs"
+              >
+                Guardar Lista
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL CREAR EVENTO / PROGRAMACIÓN PERIÓDICA */}
       {modalNuevoEvento && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
@@ -626,18 +969,38 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Tipo de Evento</label>
-                  <select
-                    value={nuevoTipo}
-                    onChange={e => setNuevoTipo(e.target.value as TipoEvento)}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white focus:outline-none"
-                  >
-                    <option value="Ensayo">Ensayo</option>
-                    <option value="Presentación">Presentación</option>
-                    <option value="Reunión">Reunión</option>
-                    <option value="Administrativo">Administrativo</option>
-                  </select>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">Tipo de Evento</label>
+                    <button
+                      type="button"
+                      onClick={() => setMostrarCrearTipo(!mostrarCrearTipo)}
+                      className="text-[10px] text-[#0099DD] font-bold hover:underline"
+                    >
+                      {mostrarCrearTipo ? 'Seleccionar existente' : '+ Nuevo tipo'}
+                    </button>
+                  </div>
+
+                  {!mostrarCrearTipo ? (
+                    <select
+                      value={nuevoTipo}
+                      onChange={e => setNuevoTipo(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white focus:outline-none"
+                    >
+                      {tiposEventos.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Nombre del nuevo tipo..."
+                      value={textoNuevoTipo}
+                      onChange={e => setTextoNuevoTipo(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-sky-300 bg-sky-50/50 rounded-xl focus:outline-none"
+                    />
+                  )}
                 </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Hora</label>
                   <input
@@ -688,7 +1051,6 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                   </div>
                 ) : (
                   <div className="space-y-2.5 pt-1">
-                    {/* Días de la semana L M M J V S D */}
                     <div>
                       <span className="block text-[11px] font-semibold text-slate-600 mb-1">
                         Repetir cada semana los días:
@@ -721,7 +1083,6 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                       </div>
                     </div>
 
-                    {/* Rango de fechas */}
                     <div className="grid grid-cols-2 gap-2 pt-1">
                       <div>
                         <label className="block text-[10px] font-semibold text-slate-600 mb-1">Desde fecha:</label>
@@ -772,7 +1133,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                 </div>
               </div>
 
-              {/* Convocatoria (Todos, Por Cuerda, Personalizada con lista desplegable) */}
+              {/* Convocatoria (Todos, Por Cuerda, Personalizada con lista o Pendiente) */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
                 <label className="block text-xs font-semibold text-slate-700">Convocatoria (¿Quiénes son citados?)</label>
                 <div className="flex items-center gap-2 text-xs">
@@ -820,56 +1181,72 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                   </div>
                 )}
 
-                {/* CITACIÓN PERSONALIZADA: Lista de miembros activa */}
+                {/* CITACIÓN PERSONALIZADA CON OPCIÓN DE LISTA PENDIENTE */}
                 {nuevaConvocatoria === 'Personalizada' && (
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2 mt-2">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-slate-700">
-                        Selecciona los integrantes citados ({miembrosElegidosIds.length} elegidos)
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (miembrosElegidosIds.length === integrantesActivos.length) {
-                            setMiembrosElegidosIds([]);
-                          } else {
-                            setMiembrosElegidosIds(integrantesActivos.map(i => i.id));
-                          }
-                        }}
-                        className="text-[11px] text-[#0099DD] font-bold hover:underline"
-                      >
-                        {miembrosElegidosIds.length === integrantesActivos.length
-                          ? 'Deseleccionar todos'
-                          : 'Seleccionar todos'}
-                      </button>
+                      <label className="flex items-center gap-2 cursor-pointer font-bold text-amber-800">
+                        <input
+                          type="checkbox"
+                          checked={dejarListaPendiente}
+                          onChange={e => setDejarListaPendiente(e.target.checked)}
+                          className="rounded text-[#0099DD]"
+                        />
+                        <span>Dejar lista pendiente para armarla más adelante</span>
+                      </label>
                     </div>
 
-                    <div className="max-h-36 overflow-y-auto space-y-1 bg-white p-2 rounded-lg border border-slate-200/70">
-                      {integrantesActivos.map(i => {
-                        const marcado = miembrosElegidosIds.includes(i.id);
-                        return (
-                          <div
-                            key={i.id}
+                    {!dejarListaPendiente && (
+                      <>
+                        <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
+                          <span className="font-semibold text-slate-700">
+                            Citados ({miembrosElegidosIds.length} seleccionados)
+                          </span>
+                          <button
+                            type="button"
                             onClick={() => {
-                              if (marcado) {
-                                setMiembrosElegidosIds(miembrosElegidosIds.filter(id => id !== i.id));
+                              if (miembrosElegidosIds.length === integrantesActivos.length) {
+                                setMiembrosElegidosIds([]);
                               } else {
-                                setMiembrosElegidosIds([...miembrosElegidosIds, i.id]);
+                                setMiembrosElegidosIds(integrantesActivos.map(i => i.id));
                               }
                             }}
-                            className="flex items-center justify-between p-1.5 hover:bg-slate-50 rounded cursor-pointer text-xs"
+                            className="text-[11px] text-[#0099DD] font-bold hover:underline"
                           >
-                            <span className="font-medium text-slate-800">{i.nombreCompleto}</span>
-                            <span className="text-[10px] text-slate-400 font-semibold">{i.cuerda}</span>
-                            {marcado ? (
-                              <CheckSquare className="w-4 h-4 text-[#0099DD]" />
-                            ) : (
-                              <Square className="w-4 h-4 text-slate-300" />
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
+                            {miembrosElegidosIds.length === integrantesActivos.length
+                              ? 'Deseleccionar todos'
+                              : 'Seleccionar todos'}
+                          </button>
+                        </div>
+
+                        <div className="max-h-36 overflow-y-auto space-y-1 bg-white p-2 rounded-lg border border-slate-200/70">
+                          {integrantesActivos.map(i => {
+                            const marcado = miembrosElegidosIds.includes(i.id);
+                            return (
+                              <div
+                                key={i.id}
+                                onClick={() => {
+                                  if (marcado) {
+                                    setMiembrosElegidosIds(miembrosElegidosIds.filter(id => id !== i.id));
+                                  } else {
+                                    setMiembrosElegidosIds([...miembrosElegidosIds, i.id]);
+                                  }
+                                }}
+                                className="flex items-center justify-between p-1.5 hover:bg-slate-50 rounded cursor-pointer text-xs"
+                              >
+                                <span className="font-medium text-slate-800">{i.nombreCompleto}</span>
+                                <span className="text-[10px] text-slate-400 font-semibold">{i.cuerda}</span>
+                                {marcado ? (
+                                  <CheckSquare className="w-4 h-4 text-[#0099DD]" />
+                                ) : (
+                                  <Square className="w-4 h-4 text-slate-300" />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

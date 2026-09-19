@@ -1,6 +1,6 @@
 export type Cuerda = 'Soprano' | 'Contralto' | 'Tenor' | 'Bajo' | 'Solista' | 'Directiva';
 export type EstadoIntegrante = 'Activo' | 'En receso' | 'Inactivo';
-export type TipoEvento = 'Ensayo' | 'Presentación' | 'Reunión' | 'Administrativo';
+export type TipoEvento = 'Ensayo' | 'Presentación' | 'Reunión' | 'Administrativo' | string;
 export type TipoConvocatoria = 'Todos' | 'Por Cuerda' | 'Personalizada';
 export type EstadoAsistencia = 'Presente' | 'Ausente' | 'Justificado';
 export type EstadoJustificacion = 'Pendiente' | 'Aprobado' | 'Rechazado';
