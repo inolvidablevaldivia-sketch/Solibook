@@ -12,6 +12,7 @@ import {
 } from 'firebase/auth';
 import { UsuarioApp, RolUsuario } from '@/types';
 import { Permiso, tienePermiso } from '@/lib/permisos';
+import { COLECCIONES, suscribirseColeccion, guardarDocumento } from '@/lib/firestoreSync';
 
 const CLAVE_USUARIOS = 'solibook_usuarios';
 const CLAVE_SESION_LOCAL = 'solibook_sesion_local';
@@ -70,7 +71,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoaded(true);
   }, []);
 
-  // Persistencia de usuarios
+  // Persistencia de usuarios (respaldo para el modo sin conexión)
   useEffect(() => {
     if (!isLoaded) return;
     try {
@@ -80,51 +81,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [usuarios, isLoaded]);
 
-  // Registra al usuario autenticado. El primero en entrar queda como
-  // Administrador; los siguientes ingresan como Miembro.
+  // Suscripción en tiempo real al directorio compartido de usuarios. Así los
+  // roles, suspensiones y vínculos con miembros llegan a todos los equipos.
+  // La sesión local sin conexión nunca se sube ni se pierde al sincronizar.
+  useEffect(() => {
+    if (!isLoaded || modoLocal) return;
+
+    const cancelar = suscribirseColeccion<UsuarioApp>(
+      COLECCIONES.usuarios,
+      recibidos => {
+        setUsuarios(prev => {
+          const sinLocal = recibidos.filter(u => u.uid !== UID_MODO_LOCAL);
+          const sesionLocal = prev.find(u => u.uid === UID_MODO_LOCAL);
+          return sesionLocal ? [...sinLocal, sesionLocal] : sinLocal;
+        });
+      },
+      () => usuariosRef.current.filter(u => u.uid !== UID_MODO_LOCAL),
+      u => u.uid
+    );
+
+    return () => cancelar();
+  }, [isLoaded, modoLocal, usuario?.uid]);
+
+  // Registra al usuario autenticado en el directorio compartido. El primero
+  // en entrar queda como Administrador; los siguientes ingresan como Miembro.
   const registrarUsuario = useCallback(
     (datos: { uid: string; email: string; nombre: string; fotoUrl?: string }): UsuarioApp => {
-      let resultado: UsuarioApp | null = null;
+      const actuales = usuariosRef.current;
+      const existente = actuales.find(u => u.uid === datos.uid);
 
-      setUsuarios(prev => {
-        const existente = prev.find(u => u.uid === datos.uid);
-        if (existente) {
-          resultado = { ...existente, ultimoAcceso: new Date().toISOString() };
-          return prev.map(u => (u.uid === datos.uid ? (resultado as UsuarioApp) : u));
-        }
-        const nuevo: UsuarioApp = {
-          uid: datos.uid,
-          email: datos.email,
-          nombre: datos.nombre,
-          fotoUrl: datos.fotoUrl,
-          rol: prev.length === 0 ? 'Administrador' : 'Miembro',
-          activo: true,
-          fechaIngreso: new Date().toISOString(),
-          ultimoAcceso: new Date().toISOString()
-        };
-        resultado = nuevo;
-        return [...prev, nuevo];
-      });
+      const perfil: UsuarioApp = existente
+        ? { ...existente, ultimoAcceso: new Date().toISOString() }
+        : {
+            uid: datos.uid,
+            email: datos.email,
+            nombre: datos.nombre,
+            fotoUrl: datos.fotoUrl,
+            rol: actuales.length === 0 ? 'Administrador' : 'Miembro',
+            activo: true,
+            fechaIngreso: new Date().toISOString(),
+            ultimoAcceso: new Date().toISOString()
+          };
 
-      // setUsuarios es síncrono para la función updater, pero para asegurar el
-      // valor de retorno se recalcula contra la lista actual cuando es nuevo.
-      if (resultado) return resultado;
+      setUsuarios(prev =>
+        prev.some(u => u.uid === perfil.uid)
+          ? prev.map(u => (u.uid === perfil.uid ? perfil : u))
+          : [...prev, perfil]
+      );
 
-      const yaExiste = usuarios.find(u => u.uid === datos.uid);
-      if (yaExiste) return { ...yaExiste, ultimoAcceso: new Date().toISOString() };
+      if (perfil.uid !== UID_MODO_LOCAL) {
+        void guardarDocumento(COLECCIONES.usuarios, perfil.uid, perfil);
+      }
 
-      return {
-        uid: datos.uid,
-        email: datos.email,
-        nombre: datos.nombre,
-        fotoUrl: datos.fotoUrl,
-        rol: usuarios.length === 0 ? 'Administrador' : 'Miembro',
-        activo: true,
-        fechaIngreso: new Date().toISOString(),
-        ultimoAcceso: new Date().toISOString()
-      };
+      return perfil;
     },
-    [usuarios]
+    []
   );
 
   // Sesión de Firebase con persistencia local del dispositivo
@@ -241,16 +252,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Nadie puede cambiar su propio rol ni suspenderse a sí mismo
   const cambiarRol = (uid: string, rol: RolUsuario) => {
     if (usuario?.uid === uid) return;
+    const actual = usuariosRef.current.find(u => u.uid === uid);
     setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, rol } : u)));
+    if (actual && uid !== UID_MODO_LOCAL) {
+      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, rol });
+    }
   };
 
   const activarUsuario = (uid: string, activo: boolean) => {
     if (usuario?.uid === uid) return;
+    const actual = usuariosRef.current.find(u => u.uid === uid);
     setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, activo } : u)));
+    if (actual && uid !== UID_MODO_LOCAL) {
+      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, activo });
+    }
   };
 
   const vincularIntegrante = (uid: string, integranteId?: string) => {
+    const actual = usuariosRef.current.find(u => u.uid === uid);
     setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, integranteId } : u)));
+    if (actual && uid !== UID_MODO_LOCAL) {
+      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, integranteId });
+    }
   };
 
   const puede = (permiso: Permiso) => {
