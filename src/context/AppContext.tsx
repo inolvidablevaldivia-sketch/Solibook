@@ -9,7 +9,9 @@ import {
   Acta,
   Justificacion,
   NotificacionItem,
-  EstadoAsistencia
+  EstadoAsistencia,
+  DocumentoInstitucional,
+  DocumentoAdjunto
 } from '@/types';
 import {
   INTEGRANTES_INICIALES,
@@ -70,6 +72,13 @@ interface AppContextType {
   notificaciones: NotificacionItem[];
   marcarNotificacionLeida: (id: string) => void;
 
+  // Documentos institucionales y de miembros
+  documentos: DocumentoInstitucional[];
+  agregarDocumento: (nuevo: Omit<DocumentoInstitucional, 'id'>) => void;
+  eliminarDocumento: (id: string) => void;
+  agregarDocumentoMiembro: (integranteId: string, doc: Omit<DocumentoAdjunto, 'id'>) => void;
+  eliminarDocumentoMiembro: (integranteId: string, docId: string) => void;
+
   // Utilidades PWA
   forzarActualizacionApp: () => void;
   usuarioActivo: { nombre: string; rol: string; iniciales: string };
@@ -97,6 +106,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [actas, setActas] = useState<Acta[]>([]);
   const [justificaciones, setJustificaciones] = useState<Justificacion[]>([]);
   const [notificaciones, setNotificaciones] = useState<NotificacionItem[]>([]);
+  const [documentos, setDocumentos] = useState<DocumentoInstitucional[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
   const [usuarioActivo, setUsuarioActivo] = useState({
@@ -116,6 +126,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const storedAct = localStorage.getItem('solibook_actas');
       const storedJust = localStorage.getItem('solibook_justificaciones');
       const storedNot = localStorage.getItem('solibook_notificaciones');
+      const storedDocs = localStorage.getItem('solibook_documentos');
 
       const dataIntegrantes: Integrante[] = storedInt ? JSON.parse(storedInt) : INTEGRANTES_INICIALES;
       const dataEventos: Evento[] = storedEv ? JSON.parse(storedEv) : EVENTOS_INICIALES;
@@ -131,6 +142,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setActas(storedAct ? JSON.parse(storedAct) : ACTAS_INICIALES);
       setJustificaciones(storedJust ? JSON.parse(storedJust) : JUSTIFICACIONES_INICIALES);
       setNotificaciones(storedNot ? JSON.parse(storedNot) : NOTIFICACIONES_INICIALES);
+      setDocumentos(storedDocs ? JSON.parse(storedDocs) : []);
     } catch {
       const base = [...INTEGRANTES_INICIALES].sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
       setIntegrantes(base);
@@ -141,6 +153,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setActas(ACTAS_INICIALES);
       setJustificaciones(JUSTIFICACIONES_INICIALES);
       setNotificaciones(NOTIFICACIONES_INICIALES);
+      setDocumentos([]);
     }
     setIsLoaded(true);
   }, []);
@@ -157,10 +170,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('solibook_actas', JSON.stringify(actas));
       localStorage.setItem('solibook_justificaciones', JSON.stringify(justificaciones));
       localStorage.setItem('solibook_notificaciones', JSON.stringify(notificaciones));
+      localStorage.setItem('solibook_documentos', JSON.stringify(documentos));
     } catch (e) {
       console.error('Error persistiendo datos:', e);
     }
-  }, [integrantes, eventos, tiposEventos, asistencias, cartas, actas, justificaciones, notificaciones, isLoaded]);
+  }, [integrantes, eventos, tiposEventos, asistencias, cartas, actas, justificaciones, notificaciones, documentos, isLoaded]);
+
+  // Aviso automático de cumpleaños: recorre los miembros activos con fecha de
+  // nacimiento y avisa cuando el próximo cumpleaños está a 7 días o menos.
+  // Usa un identificador estable para no duplicar la notificación.
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    const porAvisar: NotificacionItem[] = [];
+
+    integrantes
+      .filter(i => i.estado === 'Activo' && i.fechaNacimiento)
+      .forEach(i => {
+        const partes = (i.fechaNacimiento as string).split('-').map(Number);
+        if (partes.length !== 3 || partes.some(n => Number.isNaN(n))) return;
+        const [anioNac, mesNac, diaNac] = partes;
+
+        // Próximo cumpleaños considerando que el 29 de febrero cae el 28 en años no bisiestos
+        let proximo = new Date(hoy.getFullYear(), mesNac - 1, diaNac);
+        if (proximo.getTime() < hoy.getTime()) {
+          proximo = new Date(hoy.getFullYear() + 1, mesNac - 1, diaNac);
+        }
+        const diasRestantes = Math.round((proximo.getTime() - hoy.getTime()) / 86400000);
+        if (diasRestantes > 7) return;
+
+        const idEstable = `cumple-${i.id}-${proximo.getFullYear()}`;
+        const fechaTexto = proximo.toLocaleDateString('es-CL', { day: '2-digit', month: 'long' });
+
+        porAvisar.push({
+          id: idEstable,
+          tipo: 'Calendario',
+          titulo:
+            diasRestantes === 0
+              ? `Hoy cumple años ${i.nombreCompleto}`
+              : `Cumpleaños de ${i.nombreCompleto}`,
+          mensaje:
+            diasRestantes === 0
+              ? `Cumple ${proximo.getFullYear() - anioNac} años hoy.`
+              : `Cumple años el ${fechaTexto} (en ${diasRestantes} día${diasRestantes === 1 ? '' : 's'}).`,
+          fecha: diasRestantes === 0 ? 'Hoy' : `En ${diasRestantes} día${diasRestantes === 1 ? '' : 's'}`,
+          leido: false,
+          accionId: i.id
+        });
+      });
+
+    const nuevas = porAvisar.filter(n => !notificaciones.some(existente => existente.id === n.id));
+    if (nuevas.length > 0) {
+      setNotificaciones(prev => [...prev, ...nuevas]);
+    }
+  }, [integrantes, notificaciones, isLoaded]);
 
   // Funciones de Integrantes
   const agregarIntegrante = (nuevo: Omit<Integrante, 'id'>) => {
@@ -277,32 +343,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const marcarTodosPresentes = (eventoId: string, integrantesIds: string[]) => {
+  // Marcado masivo del paso de lista. Las justificaciones aprobadas quedan
+  // protegidas: "Todos Presentes" y "Todos Ausentes" no las sobrescriben.
+  // Solo un cambio manual, persona por persona, puede alterar un Justificado.
+  const aplicarMarcadoMasivo = (
+    eventoId: string,
+    integrantesIds: string[],
+    estado: EstadoAsistencia
+  ) => {
     setAsistencias(prev => {
-      const filtered = prev.filter(a => a.eventoId !== eventoId);
-      const nuevos: AsistenciaRegistro[] = integrantesIds.map(id => ({
-        id: `as-${Date.now()}-${id}`,
-        eventoId,
-        integranteId: id,
-        estado: 'Presente',
-        horaMarcado: new Date().toISOString()
-      }));
-      return [...filtered, ...nuevos];
+      const justificadosProtegidos = prev.filter(
+        a => a.eventoId === eventoId && a.estado === 'Justificado'
+      );
+      const idsProtegidos = justificadosProtegidos.map(a => a.integranteId);
+      // Los nuevos registros masivos se generan solo para los ids NO protegidos
+      const restantes = prev.filter(a => a.eventoId !== eventoId);
+      const nuevos: AsistenciaRegistro[] = integrantesIds
+        .filter(id => !idsProtegidos.includes(id))
+        .map(id => ({
+          id: `as-${Date.now()}-${id}`,
+          eventoId,
+          integranteId: id,
+          estado,
+          horaMarcado: new Date().toISOString()
+        }));
+      return [...restantes, ...justificadosProtegidos, ...nuevos];
     });
   };
 
-  const marcarTodosEstado = (eventoId: string, integrantesIds: string[], estado: EstadoAsistencia) => {
-    setAsistencias(prev => {
-      const filtered = prev.filter(a => a.eventoId !== eventoId);
-      const nuevos: AsistenciaRegistro[] = integrantesIds.map(id => ({
-        id: `as-${Date.now()}-${id}`,
-        eventoId,
-        integranteId: id,
-        estado,
-        horaMarcado: new Date().toISOString()
-      }));
-      return [...filtered, ...nuevos];
-    });
+  const marcarTodosPresentes = (eventoId: string, integrantesIds: string[]) => {
+    aplicarMarcadoMasivo(eventoId, integrantesIds, 'Presente');
+  };
+
+  const marcarTodosEstado = (
+    eventoId: string,
+    integrantesIds: string[],
+    estado: EstadoAsistencia
+  ) => {
+    aplicarMarcadoMasivo(eventoId, integrantesIds, estado);
   };
 
   // Quita a un integrante de la convocatoria de un evento puntual.
@@ -493,6 +571,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotificaciones(prev => prev.map(n => n.id === id ? { ...n, leido: true } : n));
   };
 
+  // Documentos institucionales (Libro de Documentos)
+  const agregarDocumento = (nuevo: Omit<DocumentoInstitucional, 'id'>) => {
+    const id = `doc-${Date.now()}`;
+    setDocumentos(prev => [{ ...nuevo, id }, ...prev]);
+  };
+
+  const eliminarDocumento = (id: string) => {
+    setDocumentos(prev => prev.filter(d => d.id !== id));
+  };
+
+  // Documentos de respaldo de un miembro (se guardan dentro de su ficha)
+  const agregarDocumentoMiembro = (integranteId: string, doc: Omit<DocumentoAdjunto, 'id'>) => {
+    const nuevo: DocumentoAdjunto = { ...doc, id: `docm-${Date.now()}` };
+    setIntegrantes(prev => prev.map(i => (
+      i.id === integranteId
+        ? { ...i, documentos: [...(i.documentos || []), nuevo] }
+        : i
+    )));
+  };
+
+  const eliminarDocumentoMiembro = (integranteId: string, docId: string) => {
+    setIntegrantes(prev => prev.map(i => (
+      i.id === integranteId
+        ? { ...i, documentos: (i.documentos || []).filter(d => d.id !== docId) }
+        : i
+    )));
+  };
+
   // Botón Maestro de Recarga PWA
   const forzarActualizacionApp = () => {
     if (typeof window !== 'undefined') {
@@ -549,6 +655,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         marcarJustificacionLeida,
         notificaciones,
         marcarNotificacionLeida,
+        documentos,
+        agregarDocumento,
+        eliminarDocumento,
+        agregarDocumentoMiembro,
+        eliminarDocumentoMiembro,
         forzarActualizacionApp,
         usuarioActivo,
         setUsuarioActivo

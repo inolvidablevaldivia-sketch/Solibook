@@ -7,6 +7,45 @@ export type EstadoJustificacion = 'Pendiente' | 'Aprobado' | 'Rechazado';
 export type EstadoCarta = 'Pendiente' | 'Aceptada' | 'Declinada' | 'Archivada';
 export type EstadoActa = 'Borrador' | 'Cerrada' | 'En_Solicitud_Edicion';
 
+export type RolUsuario = 'Administrador' | 'Directiva' | 'Secretaria' | 'Miembro';
+
+export interface UsuarioApp {
+  uid: string;
+  email: string;
+  nombre: string;
+  fotoUrl?: string;
+  rol: RolUsuario;
+  integranteId?: string; // vínculo con su ficha en Miembros
+  activo: boolean;
+  fechaIngreso: string;
+  ultimoAcceso?: string;
+}
+
+export interface DocumentoAdjunto {
+  id: string;
+  titulo: string;
+  enlaceUrl: string; // enlace a Google Drive
+  nota?: string;
+  fechaCarga: string;
+}
+
+export type CategoriaDocumento =
+  | 'Constitución'
+  | 'Tributario'
+  | 'Bancario'
+  | 'Contrato'
+  | 'Reglamento'
+  | 'Otro';
+
+export interface DocumentoInstitucional {
+  id: string;
+  titulo: string;
+  categoria: CategoriaDocumento;
+  descripcion?: string;
+  enlaceUrl: string;
+  fechaCarga: string;
+}
+
 export interface Integrante {
   id: string;
   nombreCompleto: string;
@@ -18,6 +57,9 @@ export interface Integrante {
   estado: EstadoIntegrante;
   fechaIngreso: string;
   notas?: string;
+  fechaNacimiento?: string; // YYYY-MM-DD
+  fotoUrl?: string; // base64 comprimido
+  documentos?: DocumentoAdjunto[];
 }
 
 export interface Evento {

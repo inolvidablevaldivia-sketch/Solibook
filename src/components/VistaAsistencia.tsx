@@ -2,7 +2,8 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
-import { EstadoAsistencia, Evento, Integrante } from '@/types';
+import { useAuth } from '@/context/AuthContext';
+import { EstadoAsistencia, Evento, Integrante, Justificacion } from '@/types';
 import {
   Check,
   X,
@@ -44,6 +45,7 @@ export const VistaAsistencia: React.FC<VistaAsistenciaProps> = ({
   onCrearEvento
 }) => {
   const { eventos, integrantes, asistencias, justificaciones } = useApp();
+  const { puede } = useAuth();
 
   const [eventoAbiertoId, setEventoAbiertoId] = useState<string | null>(eventoIdInicial || null);
 
@@ -185,13 +187,15 @@ export const VistaAsistencia: React.FC<VistaAsistenciaProps> = ({
           </div>
         )}
 
-        <button
-          onClick={onCrearEvento}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:border-[#0099DD] hover:text-[#0099DD] text-xs font-bold transition-colors"
-        >
-          <CalendarPlus className="w-4 h-4" />
-          Crear evento
-        </button>
+        {puede('crear_evento') && (
+          <button
+            onClick={onCrearEvento}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:border-[#0099DD] hover:text-[#0099DD] text-xs font-bold transition-colors"
+          >
+            <CalendarPlus className="w-4 h-4" />
+            Crear evento
+          </button>
+        )}
       </div>
 
       {/* Métricas rápidas */}
@@ -288,12 +292,16 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
   const {
     integrantes,
     asistencias,
+    justificaciones,
     marcarAsistencia,
     marcarTodosEstado,
     quitarDeLista,
     agregarAListaEvento,
-    cerrarAsistenciaEvento
+    cerrarAsistenciaEvento,
+    resolverJustificacion
   } = useApp();
+
+  const { puede } = useAuth();
 
   const finalizada = evento.asistenciaFinalizada;
 
@@ -303,6 +311,7 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
   const [seleccionAgregar, setSeleccionAgregar] = useState<string[]>([]);
   const [justificandoId, setJustificandoId] = useState<string | null>(null);
   const [motivoTexto, setMotivoTexto] = useState('');
+  const [justificacionAbiertaId, setJustificacionAbiertaId] = useState<string | null>(null);
 
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -334,6 +343,18 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
       .forEach(a => map.set(a.integranteId, { estado: a.estado, motivo: a.motivoJustificacion }));
     return map;
   }, [asistencias, evento.id]);
+
+  // Justificaciones pendientes de este evento, indexadas por integrante, para
+  // avisar en la fila y permitir resolverlas sin salir del paso de lista.
+  const justificacionesPendientes = useMemo(() => {
+    const map = new Map<string, Justificacion>();
+    justificaciones
+      .filter(j => j.eventoId === evento.id && j.estado === 'Pendiente')
+      .forEach(j => map.set(j.integranteId, j));
+    return map;
+  }, [justificaciones, evento.id]);
+
+  const justificacionAbierta = justificaciones.find(j => j.id === justificacionAbiertaId) || null;
 
   const filtrados = useMemo(() => {
     if (!busqueda.trim()) return convocados;
@@ -440,7 +461,7 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
               {finalizada ? 'Lista finalizada' : 'Paso de lista'}
             </h3>
             <div className="flex items-center gap-2 shrink-0">
-              {!finalizada && <BotonFinalizar compacto />}
+              {!finalizada && puede('finalizar_lista') && <BotonFinalizar compacto />}
               <button onClick={onCerrar} className="p-1 text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
@@ -493,7 +514,7 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
                 className="w-full pl-9 pr-3 py-2 bg-white text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0099DD]"
               />
             </div>
-            {!finalizada && (
+            {!finalizada && puede('pasar_lista') && (
               <>
                 <button
                   onClick={handleTodos}
@@ -523,6 +544,7 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
           {filtrados.map(integrante => {
             const registro = asistenciasMap.get(integrante.id);
             const estado = registro?.estado;
+            const justificacionPendiente = justificacionesPendientes.get(integrante.id);
 
             return (
               <div
@@ -552,10 +574,16 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
                   {estado === 'Justificado' && registro?.motivo && (
                     <p className="text-[10px] text-amber-700 truncate mt-0.5">{registro.motivo}</p>
                   )}
+                  {justificacionPendiente && (
+                    <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-700 mt-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                      Justificación pendiente
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {!finalizada ? (
+                  {!finalizada && puede('pasar_lista') ? (
                     <>
                       <button
                         onClick={() => handleMarcar(integrante.id, 'Presente')}
@@ -613,7 +641,7 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
                       >
                         {estado || 'Ausente'}
                       </span>
-                      {estado !== 'Presente' && estado !== 'Justificado' && (
+                      {estado !== 'Presente' && estado !== 'Justificado' && puede('gestionar_justificaciones') && (
                         <button
                           onClick={() => {
                             setJustificandoId(integrante.id);
@@ -625,6 +653,17 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
                         </button>
                       )}
                     </>
+                  )}
+
+                  {justificacionPendiente && puede('gestionar_justificaciones') && (
+                    <button
+                      onClick={() => setJustificacionAbiertaId(justificacionPendiente.id)}
+                      title="Ver justificación pendiente"
+                      className="flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-bold rounded-xl bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors whitespace-nowrap"
+                    >
+                      <FileText className="w-3 h-3" />
+                      Ver justificación
+                    </button>
                   )}
                 </div>
 
@@ -649,7 +688,7 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
             );
           })}
 
-          {!finalizada && filtrados.length > 0 && (
+          {!finalizada && puede('finalizar_lista') && filtrados.length > 0 && (
             <div className="pt-3">
               <BotonFinalizar />
             </div>
@@ -741,6 +780,74 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
                 className="px-4 py-2 text-xs font-bold bg-[#0099DD] hover:bg-[#0088cc] text-white rounded-xl"
               >
                 Guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Ver justificación pendiente (Aprobar / Rechazar sin salir de la lista) */}
+      {justificacionAbierta && (
+        <div className="fixed inset-0 z-70 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h4 className="text-sm font-bold text-slate-900">Justificación pendiente</h4>
+                <p className="text-xs text-slate-500 truncate mt-0.5">
+                  {integrantes.find(i => i.id === justificacionAbierta.integranteId)?.nombreCompleto ||
+                    'Integrante'}
+                </p>
+              </div>
+              <button
+                onClick={() => setJustificacionAbiertaId(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Motivo</span>
+                <p className="text-xs text-slate-700 mt-0.5">
+                  {justificacionAbierta.motivo || 'Sin detalle registrado.'}
+                </p>
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <span>Canal: {justificacionAbierta.canalIngreso.replace('_', ' ')}</span>
+                <span>{new Date(justificacionAbierta.fechaIngreso).toLocaleDateString('es-CL')}</span>
+              </div>
+              {justificacionAbierta.adjuntoUrl && (
+                <a
+                  href={justificacionAbierta.adjuntoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] font-semibold text-[#0077B6] hover:underline inline-flex items-center gap-1"
+                >
+                  <FileText className="w-3 h-3" />
+                  Ver respaldo adjunto
+                </a>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  resolverJustificacion(justificacionAbierta.id, 'Rechazado');
+                  setJustificacionAbiertaId(null);
+                }}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-50 text-[#8B1E2B] border border-rose-200 hover:bg-rose-100"
+              >
+                Rechazar
+              </button>
+              <button
+                onClick={() => {
+                  resolverJustificacion(justificacionAbierta.id, 'Aprobado');
+                  setJustificacionAbiertaId(null);
+                }}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-[#0099DD] hover:bg-[#0088cc] text-white"
+              >
+                Aprobar
               </button>
             </div>
           </div>

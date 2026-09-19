@@ -1,10 +1,10 @@
 {
-  "name": "Solibook — Solí Deo",
+  "name": "Solibook — Ministerio Vocal Solí Deo",
   "short_name": "Solibook",
-  "description": "Sistema de Gestión Administrativa Ministerio Vocal Solí Deo",
+  "description": "Sistema de gestión administrativa del Ministerio Vocal Solí Deo.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
+  "background_color": "#f8fafc",
   "theme_color": "#0099DD",
   "icons": [
     {

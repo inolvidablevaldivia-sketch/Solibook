@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { Evento, TipoConvocatoria, Cuerda } from '@/types';
 import {
   Calendar,
@@ -42,6 +43,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
     eliminarEvento,
     integrantes
   } = useApp();
+  const { puede } = useAuth();
 
   const [modoVista, setModoVista] = useState<'lista' | 'calendario'>('lista');
   const [filtroTipo, setFiltroTipo] = useState<string>('Todos');
@@ -436,17 +438,19 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
               </button>
             </div>
 
-            <button
-              onClick={() => {
-                setFechaUnica(new Date().toISOString().split('T')[0]);
-                setEsPeriodico(false);
-                setModalNuevoEvento(true);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Nueva Actividad</span>
-            </button>
+            {puede('crear_evento') && (
+              <button
+                onClick={() => {
+                  setFechaUnica(new Date().toISOString().split('T')[0]);
+                  setEsPeriodico(false);
+                  setModalNuevoEvento(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">Nueva Actividad</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -541,13 +545,15 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                     >
                       <Share2 className="w-4 h-4" />
                     </button>
-                    <button
-                      onClick={() => onIniciarAsistencia(ev.id)}
-                      className="px-3 py-1.5 bg-[#0099DD] hover:bg-[#0088cc] text-white text-xs font-semibold rounded-xl transition-colors shadow-xs hidden sm:flex items-center gap-1"
-                    >
-                      <FileCheck className="w-3.5 h-3.5" />
-                      Pasar Lista
-                    </button>
+                    {puede('pasar_lista') && (
+                      <button
+                        onClick={() => onIniciarAsistencia(ev.id)}
+                        className="px-3 py-1.5 bg-[#0099DD] hover:bg-[#0088cc] text-white text-xs font-semibold rounded-xl transition-colors shadow-xs hidden sm:flex items-center gap-1"
+                      >
+                        <FileCheck className="w-3.5 h-3.5" />
+                        Pasar Lista
+                      </button>
+                    )}
                     <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-slate-500 transition-colors" />
                   </div>
                 </div>
@@ -636,13 +642,15 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                   </h3>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => abrirEditar(eventoSeleccionado)}
-                    className="p-1.5 text-slate-400 hover:text-[#0099DD] hover:bg-sky-50 rounded-lg transition-colors"
-                    title="Editar detalles del evento"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
+                  {puede('editar_evento') && (
+                    <button
+                      onClick={() => abrirEditar(eventoSeleccionado)}
+                      className="p-1.5 text-slate-400 hover:text-[#0099DD] hover:bg-sky-50 rounded-lg transition-colors"
+                      title="Editar detalles del evento"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => setEventoSeleccionado(null)}
                     className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
@@ -724,20 +732,23 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                   <Share2 className="w-4 h-4 text-emerald-600" />
                   Copiar Wsp
                 </button>
-                <button
-                  onClick={() => {
-                    const id = eventoSeleccionado.id;
-                    setEventoSeleccionado(null);
-                    onIniciarAsistencia(id);
-                  }}
-                  className="flex-1 py-2.5 bg-[#0099DD] hover:bg-[#0088cc] text-white font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors shadow-xs"
-                >
-                  <FileCheck className="w-4 h-4" />
-                  Pasar Lista
-                </button>
+                {puede('pasar_lista') && (
+                  <button
+                    onClick={() => {
+                      const id = eventoSeleccionado.id;
+                      setEventoSeleccionado(null);
+                      onIniciarAsistencia(id);
+                    }}
+                    className="flex-1 py-2.5 bg-[#0099DD] hover:bg-[#0088cc] text-white font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                  >
+                    <FileCheck className="w-4 h-4" />
+                    Pasar Lista
+                  </button>
+                )}
               </div>
 
               {/* Opciones de Eliminación (Solo este día o todos los futuros) */}
+              {puede('eliminar_evento') && (
               <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
                 <button
                   onClick={() => {
@@ -767,6 +778,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                   </button>
                 )}
               </div>
+              )}
             </div>
           </div>
         </div>
