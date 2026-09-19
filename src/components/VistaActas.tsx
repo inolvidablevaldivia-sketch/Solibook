@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { Acta } from '@/types';
 import {
   FileText,
@@ -29,6 +30,7 @@ export const VistaActas: React.FC = () => {
     deshacerEdicionActa,
     usuarioActivo
   } = useApp();
+  const { puede } = useAuth();
 
   const [modalNueva, setModalNueva] = useState(false);
   const [modalEdicion, setModalEdicion] = useState<Acta | null>(null);
@@ -176,13 +178,15 @@ export const VistaActas: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setModalNueva(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white font-semibold text-xs rounded-xl shadow-xs transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Nueva Acta</span>
-        </button>
+        {puede('gestionar_actas') && (
+          <button
+            onClick={() => setModalNueva(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white font-semibold text-xs rounded-xl shadow-xs transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Nueva Acta</span>
+          </button>
+        )}
       </div>
 
       {/* Lista de Actas */}

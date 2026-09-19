@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { Carta, EstadoCarta } from '@/types';
 import {
   Mail,
@@ -27,6 +28,7 @@ interface VistaCartasProps {
 
 export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCarta }) => {
   const { cartas, agregarCarta, marcarCartaLeida, actualizarEstadoCarta, usuarioActivo } = useApp();
+  const { puede } = useAuth();
 
   const [filtroFlujo, setFiltroFlujo] = useState<'Todas' | 'Recibida' | 'Emitida'>('Todas');
   const [modalNueva, setModalNueva] = useState(false);
@@ -148,13 +150,15 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
             ))}
           </div>
 
-          <button
-            onClick={() => setModalNueva(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white font-semibold text-xs rounded-xl shadow-xs transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Registrar Carta</span>
-          </button>
+          {puede('gestionar_cartas') && (
+            <button
+              onClick={() => setModalNueva(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white font-semibold text-xs rounded-xl shadow-xs transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Registrar Carta</span>
+            </button>
+          )}
         </div>
       </div>
 
