@@ -940,7 +940,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
 
               {/* Convocatoria editable */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
-                <label className="block text-xs font-semibold text-slate-700">Convocatoria (¿Quiénes son citados?)</label>
+                <label className="block text-xs font-semibold text-slate-700">Convocatoria</label>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   {(['Todos', 'Por Cuerda', 'Personalizada'] as TipoConvocatoria[]).map(c => (
                     <button
@@ -996,7 +996,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                           onChange={e => setEditDejarListaPendiente(e.target.checked)}
                           className="rounded text-[#0099DD]"
                         />
-                        <span>Dejar lista pendiente para armarla más adelante</span>
+                        <span>Lista Pendiente</span>
                       </label>
                     </div>
 
@@ -1056,7 +1056,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Notas adicionales (opcional)</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Notas</label>
                 <textarea
                   rows={2}
                   value={editNotas}
@@ -1232,7 +1232,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
               {/* SELECTOR DE MODALIDAD: FECHA ÚNICA VS PERIÓDICO */}
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/70 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800">Frecuencia de la Actividad</span>
+                  <span className="text-xs font-bold text-slate-800">Frecuencia</span>
                   <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-slate-200 text-xs">
                     <button
                       type="button"
@@ -1241,7 +1241,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                         !esPeriodico ? 'bg-[#0099DD] text-white' : 'text-slate-500'
                       }`}
                     >
-                      Día Único
+                      Único
                     </button>
                     <button
                       type="button"
@@ -1250,7 +1250,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                         esPeriodico ? 'bg-[#0099DD] text-white' : 'text-slate-500'
                       }`}
                     >
-                      Periódico (Rango)
+                      Periódico
                     </button>
                   </div>
                 </div>
@@ -1328,7 +1328,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Lugar / Templo</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Lugar</label>
                   <input
                     type="text"
                     value={nuevoLugar}
@@ -1352,7 +1352,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
 
               {/* Convocatoria (Todos, Por Cuerda, Personalizada con lista o Pendiente) */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
-                <label className="block text-xs font-semibold text-slate-700">Convocatoria (¿Quiénes son citados?)</label>
+                <label className="block text-xs font-semibold text-slate-700">Convocatoria</label>
                 <div className="flex items-center gap-2 text-xs">
                   {(['Todos', 'Por Cuerda', 'Personalizada'] as const).map(c => (
                     <button
@@ -1409,7 +1409,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                           onChange={e => setDejarListaPendiente(e.target.checked)}
                           className="rounded text-[#0099DD]"
                         />
-                        <span>Dejar lista pendiente para armarla más adelante</span>
+                        <span>Lista Pendiente</span>
                       </label>
                     </div>
 
@@ -1470,7 +1470,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Notas adicionales (Opcional)
+                  Notas
                 </label>
                 <textarea
                   rows={2}
