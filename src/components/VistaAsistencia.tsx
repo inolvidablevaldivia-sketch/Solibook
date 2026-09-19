@@ -1,371 +1,744 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
-import { EstadoAsistencia, Integrante } from '@/types';
+import { EstadoAsistencia, Evento, Integrante } from '@/types';
 import {
   Check,
   X,
-  FileText,
   Search,
   CheckCheck,
-  ArrowLeft,
-  Calendar,
+  CalendarPlus,
+  CalendarClock,
   AlertCircle,
-  Save,
   CheckCircle2,
   Clock,
-  Sparkles
+  ChevronRight,
+  UserPlus,
+  MoreVertical,
+  UserMinus,
+  FileText,
+  Lock,
+  ListChecks,
+  PieChart
 } from 'lucide-react';
 
 interface VistaAsistenciaProps {
   eventoIdInicial?: string;
   onVolver?: () => void;
+  onCrearEvento?: () => void;
 }
 
-export const VistaAsistencia: React.FC<VistaAsistenciaProps> = ({ eventoIdInicial, onVolver }) => {
+const fmtFechaHora = (iso: string) =>
+  new Date(iso).toLocaleString('es-CL', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+export const VistaAsistencia: React.FC<VistaAsistenciaProps> = ({
+  eventoIdInicial,
+  onVolver,
+  onCrearEvento
+}) => {
+  const { eventos, integrantes, asistencias, justificaciones } = useApp();
+
+  const [eventoAbiertoId, setEventoAbiertoId] = useState<string | null>(eventoIdInicial || null);
+
+  useEffect(() => {
+    if (eventoIdInicial) setEventoAbiertoId(eventoIdInicial);
+  }, [eventoIdInicial]);
+
+  const activos = useMemo(() => integrantes.filter(i => i.estado === 'Activo'), [integrantes]);
+
+  const convocadosDe = useMemo(() => {
+    return (ev: Evento): Integrante[] => {
+      if (ev.tipoConvocatoria === 'Por Cuerda' && ev.cuerdasConvocadas) {
+        return activos.filter(i => ev.cuerdasConvocadas!.includes(i.cuerda));
+      }
+      if (ev.tipoConvocatoria === 'Personalizada') {
+        const ids = ev.integrantesConvocadosIds || [];
+        return activos.filter(i => ids.includes(i.id));
+      }
+      return activos;
+    };
+  }, [activos]);
+
+  const ahora = new Date();
+
+  const eventosOrdenados = useMemo(
+    () =>
+      [...eventos].sort(
+        (a, b) => new Date(a.fechaHoraInicio).getTime() - new Date(b.fechaHoraInicio).getTime()
+      ),
+    [eventos]
+  );
+
+  // 1) evento de hoy sin lista finalizada (el más cercano por hora)
+  // 2) si no hay, el próximo futuro sin finalizar
+  const eventoSugerido = useMemo(() => {
+    const hoyStr = ahora.toDateString();
+    const pendientesHoy = eventosOrdenados.filter(
+      ev => !ev.asistenciaFinalizada && new Date(ev.fechaHoraInicio).toDateString() === hoyStr
+    );
+    if (pendientesHoy.length > 0) {
+      return [...pendientesHoy].sort((a, b) => {
+        const da = Math.abs(new Date(a.fechaHoraInicio).getTime() - ahora.getTime());
+        const db = Math.abs(new Date(b.fechaHoraInicio).getTime() - ahora.getTime());
+        return da - db;
+      })[0];
+    }
+    return (
+      eventosOrdenados.find(
+        ev => !ev.asistenciaFinalizada && new Date(ev.fechaHoraInicio).getTime() >= ahora.getTime()
+      ) || null
+    );
+  }, [eventosOrdenados, ahora]);
+
+  const eventosPendientes = useMemo(
+    () => eventosOrdenados.filter(ev => !ev.asistenciaFinalizada),
+    [eventosOrdenados]
+  );
+
+  const ultimasListas = useMemo(
+    () =>
+      [...eventos]
+        .filter(ev => ev.asistenciaFinalizada)
+        .sort((a, b) => new Date(b.fechaHoraInicio).getTime() - new Date(a.fechaHoraInicio).getTime())
+        .slice(0, 5),
+    [eventos]
+  );
+
+  const porcentajeDe = (ev: Evento) => {
+    const convocados = convocadosDe(ev);
+    if (convocados.length === 0) return 0;
+    const presentes = convocados.filter(i =>
+      asistencias.some(a => a.eventoId === ev.id && a.integranteId === i.id && a.estado === 'Presente')
+    ).length;
+    return Math.round((presentes / convocados.length) * 100);
+  };
+
+  // Métricas rápidas
+  const metricas = useMemo(() => {
+    const mes = ahora.getMonth();
+    const anio = ahora.getFullYear();
+    const delMes = eventos.filter(ev => {
+      const f = new Date(ev.fechaHoraInicio);
+      return f.getMonth() === mes && f.getFullYear() === anio && ev.asistenciaFinalizada;
+    });
+
+    let citados = 0;
+    let presentes = 0;
+    let ausenciasSinJustificar = 0;
+
+    delMes.forEach(ev => {
+      const convocados = convocadosDe(ev);
+      citados += convocados.length;
+      convocados.forEach(i => {
+        const reg = asistencias.find(a => a.eventoId === ev.id && a.integranteId === i.id);
+        if (reg?.estado === 'Presente') presentes++;
+        if (reg?.estado === 'Ausente' || !reg) ausenciasSinJustificar++;
+      });
+    });
+
+    return {
+      porcentajeMes: citados > 0 ? Math.round((presentes / citados) * 100) : 0,
+      ausencias: ausenciasSinJustificar,
+      justificacionesPendientes: justificaciones.filter(j => j.estado === 'Pendiente').length,
+      pendientes: eventos.filter(ev => !ev.asistenciaFinalizada).length
+    };
+  }, [eventos, asistencias, justificaciones, convocadosDe, ahora]);
+
+  const eventoAbierto = eventos.find(e => e.id === eventoAbiertoId) || null;
+
+  return (
+    <div className="space-y-4 max-w-3xl mx-auto pb-16">
+      {/* Asistencia más cercana */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 space-y-3">
+        <h2 className="text-sm font-bold text-slate-900">Asistencia</h2>
+
+        {eventoSugerido ? (
+          <button
+            onClick={() => setEventoAbiertoId(eventoSugerido.id)}
+            className="w-full text-left rounded-2xl p-4 bg-gradient-to-r from-[#0099DD] to-[#0077B6] text-white shadow-sm hover:brightness-105 transition-all"
+          >
+            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-100">
+              Asistencia más cercana
+            </span>
+            <p className="text-lg font-bold leading-tight mt-1">{eventoSugerido.titulo}</p>
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-xs text-sky-50 flex items-center gap-1.5">
+                <CalendarClock className="w-3.5 h-3.5" />
+                {fmtFechaHora(eventoSugerido.fechaHoraInicio)}
+              </span>
+              <span className="text-xs font-semibold flex items-center gap-1">
+                Pasar lista <ChevronRight className="w-4 h-4" />
+              </span>
+            </div>
+          </button>
+        ) : (
+          <div className="rounded-2xl p-6 border border-dashed border-slate-200 text-center">
+            <CalendarClock className="w-6 h-6 text-slate-300 mx-auto mb-2" />
+            <p className="text-xs text-slate-500 font-medium">No hay actividades próximas pendientes.</p>
+          </div>
+        )}
+
+        <button
+          onClick={onCrearEvento}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:border-[#0099DD] hover:text-[#0099DD] text-xs font-bold transition-colors"
+        >
+          <CalendarPlus className="w-4 h-4" />
+          Crear evento
+        </button>
+      </div>
+
+      {/* Métricas rápidas */}
+      <div className="grid grid-cols-4 gap-2">
+        <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+          <PieChart className="w-4 h-4 text-[#0099DD] mx-auto mb-1" />
+          <span className="text-base font-black text-slate-800 block">{metricas.porcentajeMes}%</span>
+          <span className="text-[10px] text-slate-500 font-semibold">Mes</span>
+        </div>
+        <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+          <AlertCircle className="w-4 h-4 text-[#8B1E2B] mx-auto mb-1" />
+          <span className="text-base font-black text-slate-800 block">{metricas.ausencias}</span>
+          <span className="text-[10px] text-slate-500 font-semibold">Ausencias</span>
+        </div>
+        <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+          <FileText className="w-4 h-4 text-amber-600 mx-auto mb-1" />
+          <span className="text-base font-black text-slate-800 block">
+            {metricas.justificacionesPendientes}
+          </span>
+          <span className="text-[10px] text-slate-500 font-semibold">Justificaciones</span>
+        </div>
+        <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+          <ListChecks className="w-4 h-4 text-slate-500 mx-auto mb-1" />
+          <span className="text-base font-black text-slate-800 block">{metricas.pendientes}</span>
+          <span className="text-[10px] text-slate-500 font-semibold">Pendientes</span>
+        </div>
+      </div>
+
+      {/* Pendientes */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 space-y-2">
+        <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">Pendientes</h3>
+        {eventosPendientes.length === 0 && (
+          <p className="text-xs text-slate-400 py-2">No hay listas pendientes.</p>
+        )}
+        {eventosPendientes.map(ev => (
+          <button
+            key={ev.id}
+            onClick={() => setEventoAbiertoId(ev.id)}
+            className="w-full flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 hover:border-[#0099DD]/40 hover:bg-sky-50/40 transition-colors text-left"
+          >
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-slate-800 truncate">{ev.titulo}</p>
+              <span className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                <Clock className="w-3 h-3" />
+                {fmtFechaHora(ev.fechaHoraInicio)}
+              </span>
+            </div>
+            <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+          </button>
+        ))}
+      </div>
+
+      {/* Últimas listas */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 space-y-2">
+        <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">Últimas listas</h3>
+        {ultimasListas.length === 0 && (
+          <p className="text-xs text-slate-400 py-2">Aún no hay listas cerradas.</p>
+        )}
+        {ultimasListas.map(ev => (
+          <button
+            key={ev.id}
+            onClick={() => setEventoAbiertoId(ev.id)}
+            className="w-full flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 transition-colors text-left"
+          >
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-slate-800 truncate">{ev.titulo}</p>
+              <span className="text-[11px] text-slate-500">{fmtFechaHora(ev.fechaHoraInicio)}</span>
+            </div>
+            <span className="text-xs font-black text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-1 rounded-lg shrink-0">
+              {porcentajeDe(ev)}%
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {eventoAbierto && (
+        <ModalPasoLista
+          evento={eventoAbierto}
+          onCerrar={() => {
+            setEventoAbiertoId(null);
+            if (eventoIdInicial && onVolver) onVolver();
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* MODAL PASO DE LISTA                                                 */
+/* ------------------------------------------------------------------ */
+
+const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ evento, onCerrar }) => {
   const {
-    eventos,
     integrantes,
     asistencias,
     marcarAsistencia,
-    marcarTodosPresentes,
+    marcarTodosEstado,
+    quitarDeLista,
+    agregarAListaEvento,
     cerrarAsistenciaEvento
   } = useApp();
 
-  // Seleccionar el evento activo o el primero disponible
-  const [eventoId, setEventoId] = useState<string>(eventoIdInicial || eventos[0]?.id || '');
+  const finalizada = evento.asistenciaFinalizada;
+
   const [busqueda, setBusqueda] = useState('');
+  const [menuAbiertoId, setMenuAbiertoId] = useState<string | null>(null);
+  const [modalAgregar, setModalAgregar] = useState(false);
+  const [seleccionAgregar, setSeleccionAgregar] = useState<string[]>([]);
   const [justificandoId, setJustificandoId] = useState<string | null>(null);
   const [motivoTexto, setMotivoTexto] = useState('');
-  const [toastGuardado, setToastGuardado] = useState(false);
 
-  const eventoActual = eventos.find(e => e.id === eventoId);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Filtrar integrantes convocados y activos
-  const integrantesConvocados = useMemo(() => {
-    // Solo miembros activos (los inactivos se ocultan de la lista de campo)
-    const activos = integrantes.filter(i => i.estado === 'Activo');
+  const activos = useMemo(
+    () =>
+      integrantes
+        .filter(i => i.estado === 'Activo')
+        .sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto)),
+    [integrantes]
+  );
 
-    if (!eventoActual) return activos;
-
-    if (eventoActual.tipoConvocatoria === 'Por Cuerda' && eventoActual.cuerdasConvocadas) {
-      return activos.filter(i => eventoActual.cuerdasConvocadas!.includes(i.cuerda));
+  const convocados = useMemo(() => {
+    if (evento.tipoConvocatoria === 'Por Cuerda' && evento.cuerdasConvocadas) {
+      return activos.filter(i => evento.cuerdasConvocadas!.includes(i.cuerda));
     }
-
-    if (eventoActual.tipoConvocatoria === 'Personalizada' && eventoActual.integrantesConvocadosIds) {
-      return activos.filter(i => eventoActual.integrantesConvocadosIds!.includes(i.id));
+    if (evento.tipoConvocatoria === 'Personalizada') {
+      const ids = evento.integrantesConvocadosIds || [];
+      return activos.filter(i => ids.includes(i.id));
     }
+    return activos;
+  }, [activos, evento]);
 
-    return activos; // Por defecto 'Todos'
-  }, [integrantes, eventoActual]);
+  const convocadosIds = useMemo(() => convocados.map(i => i.id), [convocados]);
 
-  const integrantesFiltrados = useMemo(() => {
-    if (!busqueda.trim()) return integrantesConvocados;
-    const q = busqueda.toLowerCase();
-    return integrantesConvocados.filter(i =>
-      i.nombreCompleto.toLowerCase().includes(q) ||
-      i.iglesia.toLowerCase().includes(q) ||
-      i.cuerda.toLowerCase().includes(q)
-    );
-  }, [integrantesConvocados, busqueda]);
-
-  // Mapa de asistencias del evento actual
   const asistenciasMap = useMemo(() => {
     const map = new Map<string, { estado: EstadoAsistencia; motivo?: string }>();
     asistencias
-      .filter(a => a.eventoId === eventoId)
+      .filter(a => a.eventoId === evento.id)
       .forEach(a => map.set(a.integranteId, { estado: a.estado, motivo: a.motivoJustificacion }));
     return map;
-  }, [asistencias, eventoId]);
+  }, [asistencias, evento.id]);
 
-  // Contadores
-  const totalConvocados = integrantesConvocados.length;
-  let conteoPresentes = 0;
-  let conteoAusentes = 0;
-  let conteoJustificados = 0;
+  const filtrados = useMemo(() => {
+    if (!busqueda.trim()) return convocados;
+    const q = busqueda.toLowerCase();
+    return convocados.filter(
+      i =>
+        i.nombreCompleto.toLowerCase().includes(q) ||
+        i.iglesia.toLowerCase().includes(q) ||
+        i.cuerda.toLowerCase().includes(q)
+    );
+  }, [convocados, busqueda]);
 
-  integrantesConvocados.forEach(i => {
+  let presentes = 0;
+  let ausentes = 0;
+  let justificados = 0;
+  convocados.forEach(i => {
     const st = asistenciasMap.get(i.id)?.estado;
-    if (st === 'Presente') conteoPresentes++;
-    else if (st === 'Ausente') conteoAusentes++;
-    else if (st === 'Justificado') conteoJustificados++;
+    if (st === 'Presente') presentes++;
+    else if (st === 'Ausente') ausentes++;
+    else if (st === 'Justificado') justificados++;
   });
 
-  const totalMarcados = conteoPresentes + conteoAusentes + conteoJustificados;
+  const todosPresentes = convocados.length > 0 && presentes === convocados.length;
 
-  const handleMarcar = (integranteId: string, estado: EstadoAsistencia) => {
+  const disponiblesParaAgregar = activos.filter(i => !convocadosIds.includes(i.id));
+
+  const handleMarcar = (id: string, estado: EstadoAsistencia) => {
+    if (finalizada) return;
     if (estado === 'Justificado') {
-      setJustificandoId(integranteId);
-      setMotivoTexto(asistenciasMap.get(integranteId)?.motivo || '');
+      setJustificandoId(id);
+      setMotivoTexto(asistenciasMap.get(id)?.motivo || '');
       return;
     }
-    marcarAsistencia(eventoId, integranteId, estado);
-    mostrarAutoGuardado();
+    marcarAsistencia(evento.id, id, estado);
   };
 
   const guardarJustificacion = () => {
-    if (justificandoId) {
-      marcarAsistencia(eventoId, justificandoId, 'Justificado', motivoTexto || 'Justificación registrada en lista');
-      setJustificandoId(null);
-      setMotivoTexto('');
-      mostrarAutoGuardado();
-    }
+    if (!justificandoId) return;
+    marcarAsistencia(
+      evento.id,
+      justificandoId,
+      'Justificado',
+      motivoTexto.trim() || 'Justificación registrada en lista'
+    );
+    setJustificandoId(null);
+    setMotivoTexto('');
   };
 
-  const handleTodosPresentes = () => {
-    marcarTodosPresentes(eventoId, integrantesConvocados.map(i => i.id));
-    mostrarAutoGuardado();
-  };
-
-  const mostrarAutoGuardado = () => {
-    setToastGuardado(true);
-    setTimeout(() => setToastGuardado(false), 2000);
+  const handleTodos = () => {
+    if (finalizada) return;
+    marcarTodosEstado(evento.id, convocadosIds, todosPresentes ? 'Ausente' : 'Presente');
   };
 
   const handleFinalizar = () => {
-    if (confirm('¿Deseas dar por cerrada la asistencia de esta actividad? Quedará registrada formalmente.')) {
-      cerrarAsistenciaEvento(eventoId);
-      alert('¡Lista de asistencia cerrada con éxito!');
+    if (confirm('¿Finalizar la lista? Quedará protegida y solo se podrán gestionar justificaciones.')) {
+      cerrarAsistenciaEvento(evento.id);
+      onCerrar();
     }
   };
 
-  const handleVolverConSeguro = () => {
-    if (totalMarcados > 0 && !eventoActual?.asistenciaFinalizada) {
-      if (confirm('Tienes una lista en progreso. Tu avance está auto-guardado como borrador. ¿Deseas volver a la agenda?')) {
-        if (onVolver) onVolver();
-      }
-    } else {
-      if (onVolver) onVolver();
+  const handleQuitar = (id: string) => {
+    setMenuAbiertoId(null);
+    if (finalizada) return;
+    if (confirm('¿Quitar de la lista? El miembro seguirá en Miembros y no contará como ausente.')) {
+      quitarDeLista(evento.id, id, convocadosIds);
     }
   };
+
+  const iniciarPulsacion = (id: string) => {
+    if (finalizada) return;
+    pressTimer.current = setTimeout(() => setMenuAbiertoId(id), 550);
+  };
+  const cancelarPulsacion = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+  };
+
+  const confirmarAgregar = () => {
+    if (seleccionAgregar.length > 0) {
+      agregarAListaEvento(evento.id, seleccionAgregar, convocadosIds);
+    }
+    setSeleccionAgregar([]);
+    setModalAgregar(false);
+  };
+
+  const BotonFinalizar = ({ compacto }: { compacto?: boolean }) => (
+    <button
+      onClick={handleFinalizar}
+      className={`flex items-center justify-center gap-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white font-bold rounded-xl transition-colors shadow-xs ${
+        compacto ? 'px-3.5 py-1.5 text-xs' : 'w-full px-4 py-3 text-sm'
+      }`}
+    >
+      <CheckCircle2 className={compacto ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
+      Finalizar
+    </button>
+  );
 
   return (
-    <div className="space-y-3 max-w-3xl mx-auto pb-16">
-      {/* Toast Sutil de Auto-Guardado en Tiempo Real */}
-      <div className={`fixed bottom-20 right-4 z-40 bg-slate-900/90 text-white text-[11px] font-medium px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 transition-all duration-300 ${
-        toastGuardado ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'
-      }`}>
-        <Save className="w-3.5 h-3.5 text-emerald-400" />
-        <span>Guardado local inmediato</span>
-      </div>
-
-      {/* Cabecera del Evento Activo */}
-      <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            {onVolver && (
-              <button
-                onClick={handleVolverConSeguro}
-                className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
-                title="Volver"
-              >
-                <ArrowLeft className="w-5 h-5" />
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-start justify-center sm:p-4 animate-in fade-in">
+      <div className="bg-[#f8fafc] w-full h-full sm:h-auto sm:max-h-[92vh] sm:max-w-2xl sm:rounded-2xl shadow-2xl border border-slate-200/80 flex flex-col overflow-hidden">
+        {/* Cabecera */}
+        <div className="bg-white border-b border-slate-100 p-4 space-y-3 shrink-0">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-base font-bold text-slate-900 truncate whitespace-nowrap">
+              {finalizada ? 'Lista finalizada' : 'Paso de lista'}
+            </h3>
+            <div className="flex items-center gap-2 shrink-0">
+              {!finalizada && <BotonFinalizar compacto />}
+              <button onClick={onCerrar} className="p-1 text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
               </button>
-            )}
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-[#0099DD] bg-sky-50 px-2 py-0.5 rounded-md">
-                Paso de Lista en Vivo
-              </span>
-              <h2 className="text-base font-bold text-slate-900 mt-0.5">
-                {eventoActual ? eventoActual.titulo : 'Seleccionar Actividad'}
-              </h2>
             </div>
           </div>
 
-          {/* Selector de Evento si hay varios */}
-          <select
-            value={eventoId}
-            onChange={e => setEventoId(e.target.value)}
-            className="text-xs bg-slate-50 border border-slate-200 text-slate-700 px-2.5 py-1.5 rounded-xl font-medium focus:outline-none max-w-[160px] truncate"
-          >
-            {eventos.map(ev => (
-              <option key={ev.id} value={ev.id}>
-                {ev.titulo} ({new Date(ev.fechaHoraInicio).toLocaleDateString('es-CL')})
-              </option>
-            ))}
-          </select>
+          <div>
+            <p className="text-sm font-bold text-slate-800 truncate">{evento.titulo}</p>
+            <span className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+              <Clock className="w-3 h-3" />
+              {fmtFechaHora(evento.fechaHoraInicio)}
+              {evento.lugarNombre ? ` · ${evento.lugarNombre}` : ''}
+            </span>
+          </div>
+
+          {finalizada && (
+            <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-xl px-3 py-2">
+              <Lock className="w-3.5 h-3.5" />
+              Lista protegida. Solo se pueden gestionar justificaciones.
+            </div>
+          )}
+
+          <div className="grid grid-cols-4 gap-2 text-center">
+            <div className="bg-slate-50 p-2 rounded-xl border border-slate-100">
+              <span className="text-[10px] text-slate-400 font-bold block uppercase">Citados</span>
+              <span className="text-base font-black text-slate-800">{convocados.length}</span>
+            </div>
+            <div className="bg-emerald-50/70 p-2 rounded-xl border border-emerald-100">
+              <span className="text-[10px] text-emerald-700 font-bold block uppercase">Presentes</span>
+              <span className="text-base font-black text-emerald-800">{presentes}</span>
+            </div>
+            <div className="bg-amber-50/70 p-2 rounded-xl border border-amber-100">
+              <span className="text-[10px] text-amber-700 font-bold block uppercase">Justif.</span>
+              <span className="text-base font-black text-amber-800">{justificados}</span>
+            </div>
+            <div className="bg-rose-50/70 p-2 rounded-xl border border-rose-100">
+              <span className="text-[10px] text-rose-700 font-bold block uppercase">Ausentes</span>
+              <span className="text-base font-black text-rose-800">{ausentes}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Buscar integrante..."
+                value={busqueda}
+                onChange={e => setBusqueda(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-white text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0099DD]"
+              />
+            </div>
+            {!finalizada && (
+              <>
+                <button
+                  onClick={handleTodos}
+                  className="flex items-center gap-1 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs rounded-xl border border-emerald-200 transition-colors whitespace-nowrap"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  {todosPresentes ? 'Todos Ausentes' : 'Todos Presentes'}
+                </button>
+                <button
+                  onClick={() => setModalAgregar(true)}
+                  className="flex items-center gap-1 px-3 py-2 bg-sky-50 hover:bg-sky-100 text-[#0077B6] font-bold text-xs rounded-xl border border-sky-200 transition-colors"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  Agregar
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Resumen de Métricas Táctiles */}
-        <div className="grid grid-cols-4 gap-2 pt-2 border-t border-slate-100 text-center">
-          <div className="bg-slate-50 p-2 rounded-xl border border-slate-100">
-            <span className="text-[10px] text-slate-400 font-bold block uppercase">Citados</span>
-            <span className="text-base font-black text-slate-800">{totalConvocados}</span>
-          </div>
-          <div className="bg-emerald-50/70 p-2 rounded-xl border border-emerald-100">
-            <span className="text-[10px] text-emerald-700 font-bold block uppercase">Presentes</span>
-            <span className="text-base font-black text-emerald-800">{conteoPresentes}</span>
-          </div>
-          <div className="bg-amber-50/70 p-2 rounded-xl border border-amber-100">
-            <span className="text-[10px] text-amber-700 font-bold block uppercase">Justif.</span>
-            <span className="text-base font-black text-amber-800">{conteoJustificados}</span>
-          </div>
-          <div className="bg-rose-50/70 p-2 rounded-xl border border-rose-100">
-            <span className="text-[10px] text-rose-700 font-bold block uppercase">Ausentes</span>
-            <span className="text-base font-black text-rose-800">{conteoAusentes}</span>
-          </div>
-        </div>
+        {/* Lista */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          {filtrados.length === 0 && (
+            <p className="text-xs text-slate-400 text-center py-8">No hay integrantes en esta lista.</p>
+          )}
 
-        {/* Barra de Acciones Rápidas */}
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <button
-            onClick={handleTodosPresentes}
-            className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs rounded-xl border border-emerald-200 transition-colors"
-          >
-            <CheckCheck className="w-3.5 h-3.5" />
-            Marcar Todos Presentes (15s)
-          </button>
+          {filtrados.map(integrante => {
+            const registro = asistenciasMap.get(integrante.id);
+            const estado = registro?.estado;
 
-          <button
-            onClick={handleFinalizar}
-            className="flex items-center gap-1 px-3.5 py-1.5 bg-[#8B1E2B] hover:bg-[#721823] text-white font-bold text-xs rounded-xl transition-colors shadow-xs"
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            Finalizar Lista
-          </button>
-        </div>
-      </div>
-
-      {/* Buscador predictivo rápido */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-        <input
-          type="text"
-          placeholder="Buscar por nombre, cuerda o iglesia..."
-          value={busqueda}
-          onChange={e => setBusqueda(e.target.value)}
-          className="w-full pl-9 pr-4 py-2 bg-white text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0099DD] shadow-xs"
-        />
-      </div>
-
-      {/* Lista Táctil de Integrantes (Scroll fluido con 3 iconos circulares) */}
-      <div className="space-y-2">
-        {integrantesFiltrados.map((integrante, idx) => {
-          const registro = asistenciasMap.get(integrante.id);
-          const estado = registro?.estado;
-
-          return (
-            <div
-              key={integrante.id}
-              className={`bg-white rounded-2xl p-3 border transition-all flex items-center justify-between gap-3 shadow-xs ${
-                estado === 'Presente'
-                  ? 'border-emerald-200 bg-emerald-50/20'
-                  : estado === 'Justificado'
-                  ? 'border-amber-200 bg-amber-50/20'
-                  : estado === 'Ausente'
-                  ? 'border-rose-200 bg-rose-50/20'
-                  : 'border-slate-200/80'
-              }`}
-            >
-              {/* Información del Integrante */}
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 select-none ${
-                  estado === 'Presente' ? 'bg-emerald-100 text-emerald-800' :
-                  estado === 'Justificado' ? 'bg-amber-100 text-amber-800' :
-                  estado === 'Ausente' ? 'bg-rose-100 text-rose-800' :
-                  'bg-slate-100 text-slate-600'
-                }`}>
-                  {integrante.cuerda.slice(0, 2).toUpperCase()}
-                </div>
-
+            return (
+              <div
+                key={integrante.id}
+                onContextMenu={e => {
+                  if (!finalizada) {
+                    e.preventDefault();
+                    setMenuAbiertoId(integrante.id);
+                  }
+                }}
+                onTouchStart={() => iniciarPulsacion(integrante.id)}
+                onTouchEnd={cancelarPulsacion}
+                onTouchMove={cancelarPulsacion}
+                className={`relative bg-white rounded-2xl p-3 border transition-all flex items-center justify-between gap-3 shadow-xs ${
+                  estado === 'Presente'
+                    ? 'border-emerald-200 bg-emerald-50/20'
+                    : estado === 'Ausente'
+                      ? 'border-rose-200 bg-rose-50/20'
+                      : estado === 'Justificado'
+                        ? 'border-amber-200 bg-amber-50/20'
+                        : 'border-slate-200/80'
+                }`}
+              >
                 <div className="min-w-0">
-                  <span className="text-xs font-bold text-slate-800 block truncate leading-tight">
-                    {integrante.nombreCompleto}
-                  </span>
-                  <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5 truncate">
-                    <span className="font-semibold text-slate-600">{integrante.cuerda}</span>
-                    <span>•</span>
-                    <span className="truncate">{integrante.iglesia}</span>
-                  </div>
-
-                  {registro?.motivo && (
-                    <span className="text-[10px] text-amber-700 italic block mt-0.5 truncate">
-                      ↳ {registro.motivo}
-                    </span>
+                  <p className="text-xs font-bold text-slate-800 truncate">{integrante.nombreCompleto}</p>
+                  <span className="text-[11px] text-slate-500">{integrante.cuerda}</span>
+                  {estado === 'Justificado' && registro?.motivo && (
+                    <p className="text-[10px] text-amber-700 truncate mt-0.5">{registro.motivo}</p>
                   )}
                 </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {!finalizada ? (
+                    <>
+                      <button
+                        onClick={() => handleMarcar(integrante.id, 'Presente')}
+                        title="Presente"
+                        className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${
+                          estado === 'Presente'
+                            ? 'bg-emerald-600 border-emerald-600 text-white'
+                            : 'bg-white border-slate-200 text-slate-400 hover:border-emerald-400 hover:text-emerald-600'
+                        }`}
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleMarcar(integrante.id, 'Ausente')}
+                        title="Ausente"
+                        className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${
+                          estado === 'Ausente'
+                            ? 'bg-[#8B1E2B] border-[#8B1E2B] text-white'
+                            : 'bg-white border-slate-200 text-slate-400 hover:border-rose-400 hover:text-rose-600'
+                        }`}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleMarcar(integrante.id, 'Justificado')}
+                        title="Justificado"
+                        className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${
+                          estado === 'Justificado'
+                            ? 'bg-amber-500 border-amber-500 text-white'
+                            : 'bg-white border-slate-200 text-slate-400 hover:border-amber-400 hover:text-amber-600'
+                        }`}
+                      >
+                        <FileText className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() =>
+                          setMenuAbiertoId(menuAbiertoId === integrante.id ? null : integrante.id)
+                        }
+                        title="Opciones"
+                        className="w-9 h-9 rounded-full flex items-center justify-center border border-slate-200 text-slate-400 hover:text-slate-700 bg-white"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border ${
+                          estado === 'Presente'
+                            ? 'text-emerald-700 bg-emerald-50 border-emerald-100'
+                            : estado === 'Justificado'
+                              ? 'text-amber-700 bg-amber-50 border-amber-100'
+                              : 'text-[#8B1E2B] bg-rose-50 border-rose-100'
+                        }`}
+                      >
+                        {estado || 'Ausente'}
+                      </span>
+                      {estado !== 'Presente' && estado !== 'Justificado' && (
+                        <button
+                          onClick={() => {
+                            setJustificandoId(integrante.id);
+                            setMotivoTexto(registro?.motivo || '');
+                          }}
+                          className="px-3 py-1.5 text-[11px] font-bold rounded-xl bg-sky-50 text-[#0077B6] border border-sky-200 hover:bg-sky-100"
+                        >
+                          Justificar
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {menuAbiertoId === integrante.id && !finalizada && (
+                  <div className="absolute right-3 top-12 z-10 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                    <button
+                      onClick={() => handleQuitar(integrante.id)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-[#8B1E2B] hover:bg-rose-50 w-full whitespace-nowrap"
+                    >
+                      <UserMinus className="w-3.5 h-3.5" />
+                      Quitar de lista
+                    </button>
+                    <button
+                      onClick={() => setMenuAbiertoId(null)}
+                      className="px-4 py-2 text-xs text-slate-500 hover:bg-slate-50 w-full text-left"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                )}
               </div>
+            );
+          })}
 
-              {/* Selector Táctil Ultracompacto: [P] [A] [J] */}
-              <div className="flex items-center gap-1.5 shrink-0 select-none">
-                {/* Botón PRESENTE (P) */}
-                <button
-                  onClick={() => handleMarcar(integrante.id, 'Presente')}
-                  title="Presente"
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
-                    estado === 'Presente'
-                      ? 'bg-emerald-600 text-white font-bold shadow-xs scale-105'
-                      : 'bg-slate-100 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700'
-                  }`}
-                >
-                  <Check className="w-4 h-4 stroke-[2.5]" />
-                </button>
-
-                {/* Botón AUSENTE (A) */}
-                <button
-                  onClick={() => handleMarcar(integrante.id, 'Ausente')}
-                  title="Ausente"
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
-                    estado === 'Ausente'
-                      ? 'bg-rose-600 text-white font-bold shadow-xs scale-105'
-                      : 'bg-slate-100 text-slate-500 hover:bg-rose-50 hover:text-rose-700'
-                  }`}
-                >
-                  <X className="w-4 h-4 stroke-[2.5]" />
-                </button>
-
-                {/* Botón JUSTIFICADO (J) */}
-                <button
-                  onClick={() => handleMarcar(integrante.id, 'Justificado')}
-                  title="Justificado"
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
-                    estado === 'Justificado'
-                      ? 'bg-amber-500 text-white font-bold shadow-xs scale-105'
-                      : 'bg-slate-100 text-slate-500 hover:bg-amber-50 hover:text-amber-700'
-                  }`}
-                >
-                  <FileText className="w-4 h-4 stroke-[2]" />
-                </button>
-              </div>
+          {!finalizada && filtrados.length > 0 && (
+            <div className="pt-3">
+              <BotonFinalizar />
             </div>
-          );
-        })}
+          )}
+        </div>
       </div>
 
-      {/* Modal Rápido de Justificación */}
-      {justificandoId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-sm p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-800">Registrar Justificación</h3>
-              <button onClick={() => setJustificandoId(null)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-4 h-4" />
+      {/* Modal Agregar integrantes */}
+      {modalAgregar && !finalizada && (
+        <div className="fixed inset-0 z-60 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-slate-100">
+              <h4 className="text-sm font-bold text-slate-900">Agregar integrantes</h4>
+              <button onClick={() => setModalAgregar(false)} className="text-slate-400">
+                <X className="w-5 h-5" />
               </button>
             </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+              {disponiblesParaAgregar.length === 0 && (
+                <p className="text-xs text-slate-400 text-center py-6">
+                  Todos los miembros activos ya están en la lista.
+                </p>
+              )}
+              {disponiblesParaAgregar.map(i => (
+                <label
+                  key={i.id}
+                  className="flex items-center gap-3 p-2.5 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={seleccionAgregar.includes(i.id)}
+                    onChange={e =>
+                      setSeleccionAgregar(prev =>
+                        e.target.checked ? [...prev, i.id] : prev.filter(x => x !== i.id)
+                      )
+                    }
+                    className="accent-[#0099DD] w-4 h-4"
+                  />
+                  <span className="text-xs font-semibold text-slate-800">{i.nombreCompleto}</span>
+                  <span className="text-[11px] text-slate-400 ml-auto">{i.cuerda}</span>
+                </label>
+              ))}
+            </div>
+            <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                onClick={() => setModalAgregar(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmarAgregar}
+                className="px-4 py-2 text-xs font-bold bg-[#0099DD] hover:bg-[#0088cc] text-white rounded-xl"
+              >
+                Agregar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
+      {/* Modal Justificar */}
+      {justificandoId && (
+        <div className="fixed inset-0 z-60 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 space-y-3">
+            <h4 className="text-sm font-bold text-slate-900">Justificar inasistencia</h4>
             <p className="text-xs text-slate-500">
-              Integrante: <strong>{integrantes.find(i => i.id === justificandoId)?.nombreCompleto}</strong>
+              {integrantes.find(i => i.id === justificandoId)?.nombreCompleto}
             </p>
-
             <textarea
-              rows={3}
-              placeholder="Motivo (ej. Turno de trabajo, salud, viaje familiar)..."
               value={motivoTexto}
               onChange={e => setMotivoTexto(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500"
+              rows={3}
+              placeholder="Motivo de la justificación"
+              className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0099DD]"
             />
-
-            <div className="flex items-center justify-end gap-2 pt-1">
+            <div className="flex justify-end gap-2">
               <button
-                onClick={() => setJustificandoId(null)}
-                className="px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100 rounded-lg"
+                onClick={() => {
+                  setJustificandoId(null);
+                  setMotivoTexto('');
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
               >
                 Cancelar
               </button>
               <button
                 onClick={guardarJustificacion}
-                className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl shadow-xs"
+                className="px-4 py-2 text-xs font-bold bg-[#0099DD] hover:bg-[#0088cc] text-white rounded-xl"
               >
                 Guardar
               </button>
