@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   Filter,
   FileCheck,
   X,
@@ -21,7 +22,6 @@ import {
   Repeat,
   CheckSquare,
   Square,
-  CalendarDays,
   Edit2,
   ListPlus
 } from 'lucide-react';
@@ -77,10 +77,18 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
 
   // Formulario Editar Evento
   const [editTitulo, setEditTitulo] = useState('');
+  const [editTipo, setEditTipo] = useState<string>('Ensayo');
+  const [editMostrarCrearTipo, setEditMostrarCrearTipo] = useState(false);
+  const [editTextoNuevoTipo, setEditTextoNuevoTipo] = useState('');
+  const [editFecha, setEditFecha] = useState('');
   const [editHora, setEditHora] = useState('');
   const [editLugar, setEditLugar] = useState('');
   const [editDireccion, setEditDireccion] = useState('');
   const [editNotas, setEditNotas] = useState('');
+  const [editConvocatoria, setEditConvocatoria] = useState<TipoConvocatoria>('Todos');
+  const [editCuerdasElegidas, setEditCuerdasElegidas] = useState<Cuerda[]>([]);
+  const [editMiembrosElegidosIds, setEditMiembrosElegidosIds] = useState<string[]>([]);
+  const [editDejarListaPendiente, setEditDejarListaPendiente] = useState(false);
   const [editAlcance, setEditAlcance] = useState<'soloEste' | 'futuros'>('soloEste');
 
   const diasSemana = [
@@ -287,10 +295,20 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
   const abrirEditar = (ev: Evento) => {
     setModalEditarEvento(ev);
     setEditTitulo(ev.titulo);
-    setEditHora(new Date(ev.fechaHoraInicio).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    setEditTipo(ev.tipo);
+    setEditMostrarCrearTipo(false);
+    setEditTextoNuevoTipo('');
+    setEditFecha(ev.fechaHoraInicio.split('T')[0]);
+    setEditHora(ev.fechaHoraInicio.split('T')[1]?.slice(0, 5) || '19:30');
     setEditLugar(ev.lugarNombre);
     setEditDireccion(ev.direccion || '');
     setEditNotas(ev.notas || '');
+    setEditConvocatoria(ev.tipoConvocatoria);
+    setEditCuerdasElegidas(ev.cuerdasConvocadas || []);
+    setEditMiembrosElegidosIds(ev.integrantesConvocadosIds || []);
+    setEditDejarListaPendiente(
+      ev.tipoConvocatoria === 'Personalizada' && (!ev.integrantesConvocadosIds || ev.integrantesConvocadosIds.length === 0)
+    );
     setEditAlcance('soloEste');
   };
 
@@ -298,17 +316,32 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
     e.preventDefault();
     if (!modalEditarEvento) return;
 
-    const fechaBase = modalEditarEvento.fechaHoraInicio.split('T')[0];
-    const nuevaFechaHora = `${fechaBase}T${editHora || '19:30'}:00`;
+    let tipoFinal = editTipo;
+    if (editMostrarCrearTipo && editTextoNuevoTipo.trim()) {
+      tipoFinal = editTextoNuevoTipo.trim();
+      agregarTipoEvento(tipoFinal);
+    }
+
+    const fechaOriginal = modalEditarEvento.fechaHoraInicio.split('T')[0];
+    const fechaParaGuardar = modalEditarEvento.grupoRecurrenciaId && editAlcance === 'futuros'
+      ? fechaOriginal
+      : (editFecha || fechaOriginal);
+    const nuevaFechaHora = `${fechaParaGuardar}T${editHora || '19:30'}:00`;
 
     actualizarEvento(
       modalEditarEvento.id,
       {
         titulo: editTitulo,
+        tipo: tipoFinal,
         fechaHoraInicio: nuevaFechaHora,
         lugarNombre: editLugar,
         direccion: editDireccion,
-        notas: editNotas
+        notas: editNotas,
+        tipoConvocatoria: editConvocatoria,
+        cuerdasConvocadas: editConvocatoria === 'Por Cuerda' ? editCuerdasElegidas : undefined,
+        integrantesConvocadosIds: editConvocatoria === 'Personalizada' && !editDejarListaPendiente
+          ? editMiembrosElegidosIds
+          : undefined
       },
       editAlcance === 'futuros'
     );
@@ -329,27 +362,48 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
       )}
 
       {/* Barra de Filtros, Navegación de Mes y Acciones */}
-      <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs space-y-3">
+      <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {/* Navegación de Meses y Años (Pasado y Futuro) */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={mesAnterior}
-              className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
-              title="Mes anterior"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <h2 className="text-sm font-bold text-slate-900 capitalize min-w-[150px] text-center">
-              {mesNombre}
-            </h2>
-            <button
-              onClick={mesSiguiente}
-              className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
-              title="Mes siguiente"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Navegación de Meses y Años (Pasado y Futuro) */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={mesAnterior}
+                className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+                title="Mes anterior"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <h2 className="text-sm font-bold text-slate-900 capitalize min-w-[150px] text-center">
+                {mesNombre}
+              </h2>
+              <button
+                onClick={mesSiguiente}
+                className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+                title="Mes siguiente"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Filtro compacto de Tipo */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+              <Filter className="w-3.5 h-3.5 text-[#0099DD]" />
+              <span className="font-semibold text-slate-700">Filtro:</span>
+              <div className="relative">
+                <select
+                  value={filtroTipo}
+                  onChange={e => setFiltroTipo(e.target.value)}
+                  aria-label="Filtro por tipo de evento"
+                  className="appearance-none bg-transparent pr-5 font-bold text-slate-900 focus:outline-none cursor-pointer"
+                >
+                  {['Todos', ...tiposEventos].map(tipo => (
+                    <option key={tipo} value={tipo}>{tipo}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+              </div>
+            </div>
           </div>
 
           {/* Alternar Lista/Calendario + Botón Nueva Actividad */}
@@ -385,23 +439,6 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
               <span className="hidden sm:inline">Nueva Actividad</span>
             </button>
           </div>
-        </div>
-
-        {/* Filtros de Tipo */}
-        <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-medium pt-1 border-t border-slate-100">
-          {['Todos', ...tiposEventos].map(tipo => (
-            <button
-              key={tipo}
-              onClick={() => setFiltroTipo(tipo)}
-              className={`px-3 py-1.5 rounded-xl transition-all whitespace-nowrap ${
-                filtroTipo === tipo
-                  ? 'bg-[#0099DD] text-white shadow-xs font-semibold'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200/70'
-              }`}
-            >
-              {tipo}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -768,10 +805,13 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
       {/* MODAL EDITAR EVENTO (SOLO ESTE O FUTUROS) */}
       {modalEditarEvento && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-md overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <form onSubmit={handleGuardarEdicion} className="p-5 space-y-3.5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                <h3 className="text-base font-bold text-slate-900">Editar Actividad</h3>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Editar Actividad</h3>
+                  <p className="text-[11px] text-slate-500">Puedes modificar todos los datos del evento.</p>
+                </div>
                 <button type="button" onClick={() => setModalEditarEvento(null)} className="text-slate-400">
                   <X className="w-5 h-5" />
                 </button>
@@ -784,8 +824,87 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                   required
                   value={editTitulo}
                   onChange={e => setEditTitulo(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none"
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0099DD]"
                 />
+              </div>
+
+              {/* Alcance de edición: ¿Solo este día o todos los futuros del grupo? */}
+              {modalEditarEvento.grupoRecurrenciaId && (
+                <div className="bg-purple-50 p-3 rounded-xl border border-purple-200 space-y-2">
+                  <span className="text-xs font-bold text-purple-900 block">Alcance de los cambios:</span>
+                  <div className="space-y-1.5 text-xs text-purple-800">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="alcance"
+                        value="soloEste"
+                        checked={editAlcance === 'soloEste'}
+                        onChange={() => setEditAlcance('soloEste')}
+                      />
+                      <span>Editar solo este día</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="alcance"
+                        value="futuros"
+                        checked={editAlcance === 'futuros'}
+                        onChange={() => setEditAlcance('futuros')}
+                      />
+                      <span>Editar este día y todos los futuros programados</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">Tipo de Evento</label>
+                    <button
+                      type="button"
+                      onClick={() => setEditMostrarCrearTipo(!editMostrarCrearTipo)}
+                      className="text-[10px] text-[#0099DD] font-bold hover:underline"
+                    >
+                      {editMostrarCrearTipo ? 'Seleccionar existente' : '+ Nuevo tipo'}
+                    </button>
+                  </div>
+                  {!editMostrarCrearTipo ? (
+                    <select
+                      value={editTipo}
+                      onChange={e => setEditTipo(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white focus:outline-none"
+                    >
+                      {tiposEventos.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Nombre del nuevo tipo..."
+                      value={editTextoNuevoTipo}
+                      onChange={e => setEditTextoNuevoTipo(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-sky-300 bg-sky-50/50 rounded-xl focus:outline-none"
+                    />
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Fecha</label>
+                  <input
+                    type="date"
+                    value={editFecha}
+                    disabled={!!modalEditarEvento.grupoRecurrenciaId && editAlcance === 'futuros'}
+                    onChange={e => setEditFecha(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                  />
+                  {modalEditarEvento.grupoRecurrenciaId && editAlcance === 'futuros' && (
+                    <p className="text-[10px] text-purple-700 mt-1">
+                      En edición futura se conserva la fecha de cada actividad; puedes cambiar la hora y demás datos.
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -819,34 +938,132 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia })
                 />
               </div>
 
-              {/* Alcance de edición: ¿Solo este día o todos los futuros del grupo? */}
-              {modalEditarEvento.grupoRecurrenciaId && (
-                <div className="bg-purple-50 p-3 rounded-xl border border-purple-200 space-y-2">
-                  <span className="text-xs font-bold text-purple-900 block">Alcance de los cambios:</span>
-                  <div className="space-y-1.5 text-xs text-purple-800">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="alcance"
-                        value="soloEste"
-                        checked={editAlcance === 'soloEste'}
-                        onChange={() => setEditAlcance('soloEste')}
-                      />
-                      <span>Editar solo este día</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="alcance"
-                        value="futuros"
-                        checked={editAlcance === 'futuros'}
-                        onChange={() => setEditAlcance('futuros')}
-                      />
-                      <span>Editar este día y todos los futuros programados</span>
-                    </label>
-                  </div>
+              {/* Convocatoria editable */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <label className="block text-xs font-semibold text-slate-700">Convocatoria (¿Quiénes son citados?)</label>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {(['Todos', 'Por Cuerda', 'Personalizada'] as TipoConvocatoria[]).map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setEditConvocatoria(c)}
+                      className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
+                        editConvocatoria === c
+                          ? 'bg-[#0099DD] text-white font-bold'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
                 </div>
-              )}
+
+                {editConvocatoria === 'Por Cuerda' && (
+                  <div className="flex flex-wrap gap-1.5 pt-2">
+                    {cuerdasDisponibles.map(cuerda => {
+                      const seleccionada = editCuerdasElegidas.includes(cuerda);
+                      return (
+                        <button
+                          key={cuerda}
+                          type="button"
+                          onClick={() => {
+                            if (seleccionada) {
+                              setEditCuerdasElegidas(editCuerdasElegidas.filter(c => c !== cuerda));
+                            } else {
+                              setEditCuerdasElegidas([...editCuerdasElegidas, cuerda]);
+                            }
+                          }}
+                          className={`px-2.5 py-1 text-xs rounded-lg border transition-all ${
+                            seleccionada
+                              ? 'bg-sky-50 border-[#0099DD] text-[#0077B6] font-semibold'
+                              : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                          }`}
+                        >
+                          {cuerda}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {editConvocatoria === 'Personalizada' && (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2 mt-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <label className="flex items-center gap-2 cursor-pointer font-bold text-amber-800">
+                        <input
+                          type="checkbox"
+                          checked={editDejarListaPendiente}
+                          onChange={e => setEditDejarListaPendiente(e.target.checked)}
+                          className="rounded text-[#0099DD]"
+                        />
+                        <span>Dejar lista pendiente para armarla más adelante</span>
+                      </label>
+                    </div>
+
+                    {!editDejarListaPendiente && (
+                      <>
+                        <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
+                          <span className="font-semibold text-slate-700">
+                            Citados ({editMiembrosElegidosIds.length} seleccionados)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (editMiembrosElegidosIds.length === integrantesActivos.length) {
+                                setEditMiembrosElegidosIds([]);
+                              } else {
+                                setEditMiembrosElegidosIds(integrantesActivos.map(i => i.id));
+                              }
+                            }}
+                            className="text-[11px] text-[#0099DD] font-bold hover:underline"
+                          >
+                            {editMiembrosElegidosIds.length === integrantesActivos.length
+                              ? 'Deseleccionar todos'
+                              : 'Seleccionar todos'}
+                          </button>
+                        </div>
+
+                        <div className="max-h-36 overflow-y-auto space-y-1 bg-white p-2 rounded-lg border border-slate-200/70">
+                          {integrantesActivos.map(i => {
+                            const marcado = editMiembrosElegidosIds.includes(i.id);
+                            return (
+                              <div
+                                key={i.id}
+                                onClick={() => {
+                                  if (marcado) {
+                                    setEditMiembrosElegidosIds(editMiembrosElegidosIds.filter(id => id !== i.id));
+                                  } else {
+                                    setEditMiembrosElegidosIds([...editMiembrosElegidosIds, i.id]);
+                                  }
+                                }}
+                                className="flex items-center justify-between p-1.5 hover:bg-slate-50 rounded cursor-pointer text-xs"
+                              >
+                                <span className="font-medium text-slate-800">{i.nombreCompleto}</span>
+                                <span className="text-[10px] text-slate-400 font-semibold">{i.cuerda}</span>
+                                {marcado ? (
+                                  <CheckSquare className="w-4 h-4 text-[#0099DD]" />
+                                ) : (
+                                  <Square className="w-4 h-4 text-slate-300" />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Notas adicionales (opcional)</label>
+                <textarea
+                  rows={2}
+                  value={editNotas}
+                  onChange={e => setEditNotas(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none"
+                />
+              </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
