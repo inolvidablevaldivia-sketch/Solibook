@@ -7,13 +7,15 @@ export type EstadoJustificacion = 'Pendiente' | 'Aprobado' | 'Rechazado';
 export type EstadoCarta = 'Pendiente' | 'Aceptada' | 'Declinada' | 'Archivada';
 export type EstadoActa = 'Borrador' | 'Cerrada' | 'En_Solicitud_Edicion';
 
-export type RolUsuario = 'Administrador' | 'Directiva' | 'Secretaria' | 'Miembro';
+export type RolUsuario = 'Director' | 'Secretario' | 'Tesorero' | 'Directiva' | 'Miembro' | 'Desarrollador';
 
 export interface UsuarioApp {
   uid: string;
   email: string;
   nombre: string;
   fotoUrl?: string;
+  // Valores antiguos ('Administrador', 'Secretaria') se migran automáticamente
+  // a 'Director' y 'Secretario' al leerse (ver normalizarRol en lib/permisos).
   rol: RolUsuario;
   integranteId?: string; // vínculo con su ficha en Miembros
   activo: boolean;

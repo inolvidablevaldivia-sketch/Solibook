@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { auth } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import {
   GoogleAuthProvider,
   signInWithPopup,
@@ -10,8 +10,10 @@ import {
   setPersistence,
   browserLocalPersistence
 } from 'firebase/auth';
+import { doc, runTransaction } from 'firebase/firestore';
 import { UsuarioApp, RolUsuario } from '@/types';
-import { Permiso, tienePermiso } from '@/lib/permisos';
+import { Permiso, tienePermiso, normalizarRol, ROLES_SUPERIORES } from '@/lib/permisos';
+import { COLECCIONES, suscribirseColeccion, guardarDocumento } from '@/lib/firestoreSync';
 
 const CLAVE_USUARIOS = 'solibook_usuarios';
 const CLAVE_SESION_LOCAL = 'solibook_sesion_local';
@@ -31,9 +33,32 @@ interface AuthContextType {
   activarUsuario: (uid: string, activo: boolean) => void;
   vincularIntegrante: (uid: string, integranteId?: string) => void;
   puede: (permiso: Permiso) => boolean;
+  puedeAdministrarCuenta: (uid: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// Aplica la migración de roles antiguos (Administrador→Director,
+// Secretaria→Secretario) a cualquier usuario leído de la nube o del respaldo.
+const normalizarUsuario = (u: UsuarioApp): UsuarioApp => ({ ...u, rol: normalizarRol(u.rol) });
+
+// La primera persona que entra a la aplicación reclama la cuenta fundadora.
+// El reclamo vive en "configuracion/estado" dentro de una transacción, así dos
+// dispositivos no pueden proclamarse fundadores a la vez.
+const reclamarFundador = async (uid: string): Promise<boolean> => {
+  try {
+    const estadoRef = doc(db, 'configuracion', 'estado');
+    return await runTransaction(db, async transaccion => {
+      const estado = await transaccion.get(estadoRef);
+      if (estado.exists()) return estado.data()?.fundador === uid;
+      transaccion.set(estadoRef, { fundador: uid, creadoEn: new Date().toISOString() });
+      return true;
+    });
+  } catch (error) {
+    console.warn('[Sync] No se pudo verificar la cuenta fundadora:', error);
+    return false;
+  }
+};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [usuarios, setUsuarios] = useState<UsuarioApp[]>([]);
@@ -56,11 +81,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const guardados = localStorage.getItem(CLAVE_USUARIOS);
       const lista: UsuarioApp[] = guardados ? JSON.parse(guardados) : [];
-      setUsuarios(lista);
+      setUsuarios(lista.map(normalizarUsuario));
 
       const sesionLocal = localStorage.getItem(CLAVE_SESION_LOCAL);
       if (sesionLocal) {
-        const local: UsuarioApp = JSON.parse(sesionLocal);
+        const local: UsuarioApp = normalizarUsuario(JSON.parse(sesionLocal));
         setUsuario(local);
         setModoLocal(true);
       }
@@ -70,7 +95,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoaded(true);
   }, []);
 
-  // Persistencia de usuarios
+  // Persistencia de usuarios (respaldo para el modo sin conexión)
   useEffect(() => {
     if (!isLoaded) return;
     try {
@@ -80,51 +105,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [usuarios, isLoaded]);
 
-  // Registra al usuario autenticado. El primero en entrar queda como
-  // Administrador; los siguientes ingresan como Miembro.
+  // Suscripción en tiempo real al directorio compartido de usuarios. Así los
+  // roles, suspensiones y vínculos con miembros llegan a todos los equipos.
+  // Cada cuenta se registra sola al iniciar sesión, por eso no hay siembra.
+  useEffect(() => {
+    if (!isLoaded || modoLocal) return;
+
+    const cancelar = suscribirseColeccion<UsuarioApp>(
+      COLECCIONES.usuarios,
+      recibidos => {
+        setUsuarios(prev => {
+          const sinLocal = recibidos.map(normalizarUsuario).filter(u => u.uid !== UID_MODO_LOCAL);
+          const sesionLocal = prev.find(u => u.uid === UID_MODO_LOCAL);
+          return sesionLocal ? [...sinLocal, sesionLocal] : sinLocal;
+        });
+      },
+      () => [],
+      u => u.uid
+    );
+
+    return () => cancelar();
+  }, [isLoaded, modoLocal, usuario?.uid]);
+
+  // Registra al usuario autenticado. La persona fundadora queda como Director
+  // (verificado contra el servidor); los nuevos ingresan como Miembro.
   const registrarUsuario = useCallback(
     (datos: { uid: string; email: string; nombre: string; fotoUrl?: string }): UsuarioApp => {
-      let resultado: UsuarioApp | null = null;
+      const ahora = new Date().toISOString();
+      const existente = usuariosRef.current.find(u => u.uid === datos.uid);
 
-      setUsuarios(prev => {
-        const existente = prev.find(u => u.uid === datos.uid);
-        if (existente) {
-          resultado = { ...existente, ultimoAcceso: new Date().toISOString() };
-          return prev.map(u => (u.uid === datos.uid ? (resultado as UsuarioApp) : u));
-        }
-        const nuevo: UsuarioApp = {
-          uid: datos.uid,
-          email: datos.email,
-          nombre: datos.nombre,
-          fotoUrl: datos.fotoUrl,
-          rol: prev.length === 0 ? 'Administrador' : 'Miembro',
-          activo: true,
-          fechaIngreso: new Date().toISOString(),
-          ultimoAcceso: new Date().toISOString()
-        };
-        resultado = nuevo;
-        return [...prev, nuevo];
-      });
+      const perfil: UsuarioApp = existente
+        ? { ...normalizarUsuario(existente), ultimoAcceso: ahora }
+        : {
+            uid: datos.uid,
+            email: datos.email,
+            nombre: datos.nombre,
+            fotoUrl: datos.fotoUrl,
+            rol: 'Miembro', // provisional hasta verificar el reclamo de fundador
+            activo: true,
+            fechaIngreso: ahora,
+            ultimoAcceso: ahora
+          };
 
-      // setUsuarios es síncrono para la función updater, pero para asegurar el
-      // valor de retorno se recalcula contra la lista actual cuando es nuevo.
-      if (resultado) return resultado;
+      setUsuarios(prev =>
+        prev.some(u => u.uid === perfil.uid)
+          ? prev.map(u => (u.uid === perfil.uid ? perfil : u))
+          : [...prev, perfil]
+      );
 
-      const yaExiste = usuarios.find(u => u.uid === datos.uid);
-      if (yaExiste) return { ...yaExiste, ultimoAcceso: new Date().toISOString() };
+      if (perfil.uid === UID_MODO_LOCAL) return perfil;
 
-      return {
-        uid: datos.uid,
-        email: datos.email,
-        nombre: datos.nombre,
-        fotoUrl: datos.fotoUrl,
-        rol: usuarios.length === 0 ? 'Administrador' : 'Miembro',
-        activo: true,
-        fechaIngreso: new Date().toISOString(),
-        ultimoAcceso: new Date().toISOString()
-      };
+      if (existente) {
+        // Escribe el rol ya normalizado: migra los valores antiguos al vuelo.
+        void guardarDocumento(COLECCIONES.usuarios, perfil.uid, perfil);
+      } else {
+        // Cuenta nueva: primero el reclamo transaccional de fundador, luego el
+        // registro (las reglas exigen ese orden para otorgar el rol Director).
+        void reclamarFundador(perfil.uid).then(esFundador => {
+          const definitivo: UsuarioApp = { ...perfil, rol: esFundador ? 'Director' : 'Miembro' };
+          setUsuarios(prev => prev.map(u => (u.uid === definitivo.uid ? definitivo : u)));
+          void guardarDocumento(COLECCIONES.usuarios, definitivo.uid, definitivo);
+        });
+      }
+
+      return perfil;
     },
-    [usuarios]
+    []
   );
 
   // Sesión de Firebase con persistencia local del dispositivo
@@ -223,7 +269,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         uid: UID_MODO_LOCAL,
         email: '',
         nombre: 'Sesión sin conexión',
-        rol: usuarios.length === 0 ? 'Administrador' : 'Miembro',
+        rol: usuarios.length === 0 ? 'Director' : 'Miembro',
         activo: true,
         fechaIngreso: new Date().toISOString(),
         ultimoAcceso: new Date().toISOString()
@@ -238,19 +284,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem(CLAVE_SESION_LOCAL, JSON.stringify(perfil));
   };
 
+  // Quién puede tocar qué cuenta: el Desarrollador puede con cualquiera; el
+  // Director administra todas las cuentas EXCEPTO las de nivel superior
+  // (Director y Desarrollador); el resto de los roles no administra cuentas.
+  const puedeAdministrarCuenta = (uid: string): boolean => {
+    if (!usuario || uid === UID_MODO_LOCAL) return false;
+    const rolPropio = normalizarRol(usuario.rol);
+    if (rolPropio === 'Desarrollador') return true;
+    if (rolPropio !== 'Director') return false;
+    const objetivo = usuariosRef.current.find(u => u.uid === uid);
+    if (!objetivo) return false;
+    return !ROLES_SUPERIORES.includes(normalizarRol(objetivo.rol));
+  };
+
   // Nadie puede cambiar su propio rol ni suspenderse a sí mismo
   const cambiarRol = (uid: string, rol: RolUsuario) => {
     if (usuario?.uid === uid) return;
+    if (!puedeAdministrarCuenta(uid)) return;
+    // Solo el Desarrollador puede nombrar cuentas de nivel superior
+    if (normalizarRol(usuario?.rol) !== 'Desarrollador' && ROLES_SUPERIORES.includes(rol)) return;
+    const actual = usuariosRef.current.find(u => u.uid === uid);
     setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, rol } : u)));
+    if (actual) {
+      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, rol });
+    }
   };
 
   const activarUsuario = (uid: string, activo: boolean) => {
     if (usuario?.uid === uid) return;
+    if (!puedeAdministrarCuenta(uid)) return;
+    const actual = usuariosRef.current.find(u => u.uid === uid);
     setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, activo } : u)));
+    if (actual) {
+      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, activo });
+    }
   };
 
   const vincularIntegrante = (uid: string, integranteId?: string) => {
+    if (!puedeAdministrarCuenta(uid)) return;
+    const actual = usuariosRef.current.find(u => u.uid === uid);
     setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, integranteId } : u)));
+    if (actual) {
+      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, integranteId });
+    }
   };
 
   const puede = (permiso: Permiso) => {
@@ -273,7 +349,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cambiarRol,
         activarUsuario,
         vincularIntegrante,
-        puede
+        puede,
+        puedeAdministrarCuenta
       }}
     >
       {children}

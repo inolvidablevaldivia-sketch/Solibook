@@ -2,6 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import {
   CalendarClock,
   Calendar,
@@ -33,6 +34,7 @@ const fmtFechaHora = (iso: string) =>
 
 export const VistaInicio: React.FC<VistaInicioProps> = ({ setVistaActual, onIniciarAsistencia }) => {
   const { eventos, integrantes, asistencias, justificaciones, documentos } = useApp();
+  const { puede } = useAuth();
 
   const activos = useMemo(() => integrantes.filter(i => i.estado === 'Activo'), [integrantes]);
 
@@ -162,25 +164,31 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({ setVistaActual, onInic
         )}
       </div>
 
-      {/* Resumen */}
+      {/* Resumen: solo se muestran las cifras que el rol puede conocer */}
       <div className="grid grid-cols-3 gap-2">
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
-          <Users className="w-4 h-4 text-[#0099DD] mx-auto mb-1" />
-          <span className="text-base font-black text-slate-800 block">{activos.length}</span>
-          <span className="text-[10px] text-slate-500 font-semibold">Miembros activos</span>
-        </div>
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
-          <FileText className="w-4 h-4 text-slate-500 mx-auto mb-1" />
-          <span className="text-base font-black text-slate-800 block">{documentos.length}</span>
-          <span className="text-[10px] text-slate-500 font-semibold">Documentos</span>
-        </div>
-        <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
-          <CalendarClock className="w-4 h-4 text-emerald-600 mx-auto mb-1" />
-          <span className="text-base font-black text-slate-800 block">
-            {resumenMes.porcentaje === null ? '—' : `${resumenMes.porcentaje}%`}
-          </span>
-          <span className="text-[10px] text-slate-500 font-semibold">Asistencia del mes</span>
-        </div>
+        {puede('ver_miembros') && (
+          <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+            <Users className="w-4 h-4 text-[#0099DD] mx-auto mb-1" />
+            <span className="text-base font-black text-slate-800 block">{activos.length}</span>
+            <span className="text-[10px] text-slate-500 font-semibold">Miembros activos</span>
+          </div>
+        )}
+        {puede('ver_documentos') && (
+          <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+            <FileText className="w-4 h-4 text-slate-500 mx-auto mb-1" />
+            <span className="text-base font-black text-slate-800 block">{documentos.length}</span>
+            <span className="text-[10px] text-slate-500 font-semibold">Documentos</span>
+          </div>
+        )}
+        {puede('pasar_lista') && (
+          <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+            <CalendarClock className="w-4 h-4 text-emerald-600 mx-auto mb-1" />
+            <span className="text-base font-black text-slate-800 block">
+              {resumenMes.porcentaje === null ? '—' : `${resumenMes.porcentaje}%`}
+            </span>
+            <span className="text-[10px] text-slate-500 font-semibold">Asistencia del mes</span>
+          </div>
+        )}
       </div>
 
       {/* Accesos directos */}

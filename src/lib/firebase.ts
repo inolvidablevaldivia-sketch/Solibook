@@ -1,6 +1,10 @@
 // Configuración modular de Firebase v11+
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager
+} from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 
@@ -16,6 +20,15 @@ const firebaseConfig = {
 
 // Inicialización singleton segura en SSR
 export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-export const db = getFirestore(app);
+
+// Firestore con caché local persistente: la app puede leer y escribir sin
+// conexión y los cambios se sincronizan solos al recuperar internet.
+// persistentMultipleTabManager permite tener la app abierta en varias
+// pestañas a la vez e ignoreUndefinedProperties protege las escrituras de
+// objetos con campos opcionales vacíos.
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  ignoreUndefinedProperties: true
+});
 export const auth = getAuth(app);
 export const storage = getStorage(app);

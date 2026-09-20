@@ -1,0 +1,237 @@
+rules_version = '2';
+// ═════════════════════════════════════════════════════════════════════════
+// Reglas de seguridad de Solibook — modelo de roles de la directiva.
+//
+// Se publican en: Firebase Console → Firestore Database → Reglas
+// o con: firebase deploy --only firestore:rules
+//
+// Roles (de mayor a menor alcance):
+//   Desarrollador → acceso absoluto, incluidas las cuentas de nivel Director.
+//   Director      → todos los permisos, EXCEPTO eliminar o modificar cuentas
+//                   de nivel Director o Desarrollador.
+//   Secretario    → todos los permisos, excepto administrar usuarios y roles.
+//   Tesorero      → Secretario, menos: agregar/eliminar miembros y aprobar o
+//                   rechazar justificaciones.
+//   Directiva     → Tesorero, menos: dar acuse de recibo y eliminar documentos.
+//   Miembro       → solo lectura del calendario (actividades futuras y su
+//                   citación). Lee únicamente su propia ficha de integrante.
+//
+// Migración: los valores antiguos 'Administrador' y 'Secretaria' se tratan
+// como 'Director' y 'Secretario' mientras las cuentas se actualizan solas.
+// ═════════════════════════════════════════════════════════════════════════
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ───────────────────────── Funciones auxiliares ─────────────────────────
+
+    function autenticado() {
+      return request.auth != null;
+    }
+
+    function rutaUsuario(uid) {
+      return /databases/$(database)/documents/usuarios/$(uid);
+    }
+
+    function perfil() {
+      return get(rutaUsuario(request.auth.uid)).data;
+    }
+
+    function activo() {
+      return autenticado()
+        && exists(rutaUsuario(request.auth.uid))
+        && perfil().activo == true;
+    }
+
+    // Rol vigente del que llama, con migración de valores antiguos al vuelo.
+    function rolActual() {
+      return perfil().rol == 'Administrador' ? 'Director'
+        : perfil().rol == 'Secretaria' ? 'Secretario'
+        : perfil().rol;
+    }
+
+    function rolEn(roles) {
+      return activo() && rolActual() in roles;
+    }
+
+    // Gestión diaria del ministerio (todo excepto Miembro).
+    function esGestion() {
+      return rolEn(['Director', 'Secretario', 'Tesorero', 'Directiva', 'Desarrollador']);
+    }
+
+    // Aprueban justificaciones y agregan/eliminan miembros.
+    function esSuperior() {
+      return rolEn(['Director', 'Secretario', 'Desarrollador']);
+    }
+
+    // Dan acuse de recibo (vistoPor) y eliminan documentos institucionales.
+    function tieneAcuseYEliminaDocs() {
+      return rolEn(['Director', 'Secretario', 'Tesorero', 'Desarrollador']);
+    }
+
+    function esDesarrollador() {
+      return rolEn(['Desarrollador']);
+    }
+
+    function esFundador() {
+      return exists(/databases/$(database)/documents/configuracion/estado)
+        && get(/databases/$(database)/documents/configuracion/estado).data.fundador == request.auth.uid;
+    }
+
+    function rolValido(rol) {
+      return rol in ['Director', 'Secretario', 'Tesorero', 'Directiva', 'Miembro', 'Desarrollador'];
+    }
+
+    // El documento entrante conserva rol, estado y vínculo de ficha del
+    // original (o solo migra un rol antiguo a su equivalente vigente).
+    function sinTocarSeguridad() {
+      return request.resource.data.activo == resource.data.activo
+        && (
+          request.resource.data.rol == resource.data.rol
+          || (resource.data.rol == 'Administrador' && request.resource.data.rol == 'Director')
+          || (resource.data.rol == 'Secretaria' && request.resource.data.rol == 'Secretario')
+        )
+        && (
+          (!('integranteId' in request.resource.data) && !('integranteId' in resource.data))
+          || request.resource.data.integranteId == resource.data.integranteId
+        );
+    }
+
+    // ──────────────────────── Usuarios y roles ────────────────────────
+
+    match /usuarios/{uid} {
+      // Cualquier persona con sesión puede listar las cuentas: la app muestra
+      // nombres de la directiva y cada quien necesita conocer su propio rol.
+      allow read: if autenticado();
+
+      // Registro inicial: solo la propia cuenta, activa y con rol válido.
+      // Toda cuenta nueva entra como 'Miembro'; solo la persona fundadora
+      // (reclamo previo en configuracion/estado) puede nacer como 'Director'.
+      allow create: if autenticado() && request.auth.uid == uid
+        && request.resource.data.activo == true
+        && rolValido(request.resource.data.rol)
+        && (
+          request.resource.data.rol == 'Miembro'
+          || (request.resource.data.rol == 'Director' && esFundador())
+        );
+
+      allow update: if
+        // 1) El Desarrollador puede todo, sobre cualquier cuenta.
+        esDesarrollador()
+        // 2) El Director administra cuentas NO superiores y jamás puede
+        //    nombrar a alguien Director o Desarrollador. Las cuentas con el
+        //    valor antiguo 'Secretaria' también las puede administrar.
+        || (
+          rolEn(['Director'])
+          && resource.data.rol in ['Secretario', 'Secretaria', 'Tesorero', 'Directiva', 'Miembro']
+          && request.resource.data.rol in ['Secretario', 'Tesorero', 'Directiva', 'Miembro']
+        )
+        // 3) La propia cuenta: solo datos de sesión (último acceso, nombre,
+        //    foto) y la migración del propio rol antiguo. Rol, estado y
+        //    ficha vinculada quedan protegidos.
+        || (autenticado() && request.auth.uid == uid && sinTocarSeguridad());
+
+      // Las cuentas se suspenden, no se borran: el historial conserva autoría.
+      allow delete: if false;
+    }
+
+    // ──────────────────────── Configuración ────────────────────────
+
+    match /configuracion/{documento} {
+      allow read: if autenticado();
+      // Cualquier sesión puede crear docs de configuración (la app los siembra
+      // y la persona fundadora reclama "estado" en una transacción atómica).
+      allow create: if autenticado();
+      // "estado" guarda el reclamo de fundador: solo el Desarrollador lo toca.
+      // "general" (tipos de evento) y "semillas" (migración): roles de gestión.
+      allow update: if esDesarrollador()
+        || (documento != 'estado' && esGestion());
+      allow delete: if false;
+    }
+
+    // ──────────────────────── Agenda y asistencia ────────────────────────
+
+    // Miembro incluido: el calendario es su única vista.
+    match /eventos/{id} {
+      allow read: if activo();
+      allow write: if esGestion();
+    }
+
+    match /asistencias/{id} {
+      allow read, write: if esGestion();
+    }
+
+    match /justificaciones/{id} {
+      allow read: if esGestion();
+      // Registrar una justificación: cualquier rol de gestión. Nace como
+      // "Pendiente" (aprobarla de inmediato exige nivel superior).
+      allow create: if esGestion()
+        && (request.resource.data.estado == 'Pendiente' || esSuperior());
+      // Editar el contenido: gestión. Cambiar su resolución (aprobar o
+      // rechazar): solo nivel superior. Marcar vistoPor: quienes tienen acuse.
+      allow update: if esGestion()
+        && (
+          request.resource.data.estado == resource.data.estado
+          || esSuperior()
+        )
+        && (
+          request.resource.data.vistoPor == resource.data.vistoPor
+          || tieneAcuseYEliminaDocs()
+        );
+      allow delete: if esSuperior();
+    }
+
+    // ──────────────────────── Libros ────────────────────────
+
+    // La foto de perfil viaja en Base64 (~30-60 KB) dentro del documento;
+    // se topa a ~950 KB para proteger el límite de 1 MB por documento.
+    function fotoValida() {
+      return !('fotoUrl' in request.resource.data)
+        || request.resource.data.fotoUrl.size() <= 950000;
+    }
+
+    match /integrantes/{id} {
+      // Consulta puntual: gestión, o cualquier cuenta activa leyendo SU PROPIA
+      // ficha (así el Miembro sabe su cuerda y si está citado)…
+      allow get: if esGestion()
+        || (activo() && perfil().integranteId == id);
+      // …pero el listado completo del directorio queda restringido a gestión.
+      allow list: if esGestion();
+      allow create: if esSuperior() && fotoValida();
+      allow delete: if esSuperior();
+      allow update: if esGestion() && fotoValida();
+    }
+
+    match /cartas/{id} {
+      allow read: if esGestion();
+      allow create, delete: if esGestion();
+      // Editar: gestión; marcar vistoPor (acuse de recibo): quien corresponda.
+      allow update: if esGestion()
+        && (
+          request.resource.data.vistoPor == resource.data.vistoPor
+          || tieneAcuseYEliminaDocs()
+        );
+    }
+
+    match /actas/{id} {
+      allow read, write: if esGestion();
+    }
+
+    match /documentos/{id} {
+      allow read: if esGestion();
+      allow create, update: if esGestion();
+      // Eliminar documentos: fuera del alcance de Directiva.
+      allow delete: if tieneAcuseYEliminaDocs();
+    }
+
+    // ──────────────────────── Avisos ────────────────────────
+
+    match /notificaciones/{id} {
+      allow read, write: if esGestion();
+    }
+
+    // ─────────────────── Candado final: todo lo demás, negado ───────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
