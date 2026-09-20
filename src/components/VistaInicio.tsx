@@ -17,13 +17,16 @@ import {
   Users,
   AlertCircle,
   Clock,
-  Music
+  Mic,
+  Music,
+  Send
 } from 'lucide-react';
 
 interface VistaInicioProps {
   setVistaActual: (v: string) => void;
   onIniciarAsistencia: (eventoId: string) => void;
   onAbrirAgendaFiltrada: (tipo: string) => void;
+  onEnviarCalendario: () => void;
 }
 
 const fmtFechaHora = (iso: string) =>
@@ -38,7 +41,8 @@ const fmtFechaHora = (iso: string) =>
 export const VistaInicio: React.FC<VistaInicioProps> = ({
   setVistaActual,
   onIniciarAsistencia,
-  onAbrirAgendaFiltrada
+  onAbrirAgendaFiltrada,
+  onEnviarCalendario
 }) => {
   const { eventos, integrantes, asistencias, justificaciones, documentos } = useApp();
   const { puede } = useAuth();
@@ -164,31 +168,67 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({
           </div>
         )}
         {puede('ver_agenda') && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+          // Los dos accesos viven siempre en una sola fila, también en móvil:
+          // cada uno ocupa la mitad del ancho y comparten la misma altura.
+          <div className="grid grid-cols-2 items-stretch gap-2.5">
             <button
               onClick={() => onAbrirAgendaFiltrada('Presentación')}
-              className="text-left rounded-xl p-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors group"
+              className="group flex h-full min-h-[92px] flex-col justify-between rounded-2xl bg-gradient-to-br from-[#C52537] to-[#8B1E2B] p-3 text-left text-white shadow-lg shadow-rose-900/25 transition-all hover:brightness-110 active:scale-[0.98]"
             >
               <span className="flex items-center justify-between gap-2">
-                <span className="text-xs font-black text-[#9F1239]">Presentaciones</span>
-                <ChevronRight className="w-4 h-4 text-[#B42335] group-hover:translate-x-0.5 transition-transform" />
+                <span className="flex w-7 h-7 shrink-0 items-center justify-center rounded-xl bg-white/20">
+                  <Mic className="w-4 h-4 text-white" />
+                </span>
+                <ChevronRight className="w-4 h-4 text-white/75 transition-transform group-hover:translate-x-0.5" />
               </span>
-              <span className="text-[10px] text-rose-700/80 block mt-0.5">Ver sólo presentaciones en calendario</span>
+              <span className="mt-2 block">
+                <span className="block text-[13px] font-black leading-tight">Presentaciones</span>
+                <span className="mt-0.5 block text-[10px] leading-tight text-white/80">
+                  Ver en calendario
+                </span>
+              </span>
             </button>
+
             <button
               onClick={() => onAbrirAgendaFiltrada('Concierto')}
-              className="text-left rounded-xl p-3 bg-[#FFF8E8] hover:bg-[#FFF1D2] border border-[#E6B95C] transition-colors group"
+              className="group flex h-full min-h-[92px] flex-col justify-between rounded-2xl bg-gradient-to-br from-[#C88A12] to-[#9A6700] p-3 text-left text-white shadow-lg shadow-amber-900/25 transition-all hover:brightness-110 active:scale-[0.98]"
             >
               <span className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-xs font-black text-[#805300]">
-                  <Music className="w-3.5 h-3.5" />
-                  Conciertos
+                <span className="flex w-7 h-7 shrink-0 items-center justify-center rounded-xl bg-white/20">
+                  <Music className="w-4 h-4 text-white" />
                 </span>
-                <ChevronRight className="w-4 h-4 text-[#9A6700] group-hover:translate-x-0.5 transition-transform" />
+                <ChevronRight className="w-4 h-4 text-white/75 transition-transform group-hover:translate-x-0.5" />
               </span>
-              <span className="text-[10px] text-[#805300]/80 block mt-0.5">Ver sólo conciertos en calendario</span>
+              <span className="mt-2 block">
+                <span className="block text-[13px] font-black leading-tight">Conciertos</span>
+                <span className="mt-0.5 block text-[10px] leading-tight text-white/80">
+                  Ver en calendario
+                </span>
+              </span>
             </button>
           </div>
+        )}
+
+        {/* Acceso directo: abre Agenda con el modal "Enviar calendario" listo.
+            Reutiliza el mismo modal y el mismo generador de texto de Agenda. */}
+        {puede('crear_evento') && (
+          <button
+            onClick={onEnviarCalendario}
+            className="group flex w-full items-center justify-between gap-3 rounded-2xl bg-gradient-to-r from-[#25D366] to-[#128C7E] p-3 text-left text-white shadow-lg shadow-emerald-900/25 transition-all hover:brightness-110 active:scale-[0.99]"
+          >
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="flex w-9 h-9 shrink-0 items-center justify-center rounded-xl bg-white/20">
+                <Send className="w-4 h-4 text-white" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[13px] font-black leading-tight">Enviar calendario</span>
+                <span className="mt-0.5 block text-[10px] leading-tight text-white/85">
+                  Comparte las actividades por WhatsApp
+                </span>
+              </span>
+            </span>
+            <ChevronRight className="w-4 h-4 shrink-0 text-white/80 transition-transform group-hover:translate-x-0.5" />
+          </button>
         )}
       </div>
 
