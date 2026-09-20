@@ -4,6 +4,10 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { Evento, TipoConvocatoria, Cuerda } from '@/types';
+import { ModalEnviarCalendario } from './ModalEnviarCalendario';
+import { normalizarTipoEvento, obtenerEstiloEvento } from '@/lib/coloresEventos';
+import { formatearEventoParaWhatsApp } from '@/lib/compartirAgenda';
+import { detectarServicio, esEnlaceValido, normalizarEnlace, pareceEnlacePrivado } from '@/lib/enlaces';
 import {
   Calendar,
   Clock,
@@ -24,15 +28,179 @@ import {
   CheckSquare,
   Square,
   Edit2,
-  ListPlus
+  ListPlus,
+  FolderOpen,
+  Link2,
+  ExternalLink,
+  AlertTriangle,
+  Send
 } from 'lucide-react';
+
+export interface NavegacionInicialAgenda {
+  id: number;
+  tipo: string;
+}
 
 interface VistaAgendaProps {
   onIniciarAsistencia: (eventoId: string) => void;
   solicitarNuevoEvento?: number;
+  navegacionInicial?: NavegacionInicialAgenda;
 }
 
-export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, solicitarNuevoEvento }) => {
+const PanelDocumentosEvento: React.FC<{ eventoId: string; visible: boolean }> = ({ eventoId, visible }) => {
+  const { documentosEvento, agregarDocumentoEvento, eliminarDocumentoEvento } = useApp();
+  const [desplegado, setDesplegado] = useState(false);
+  const [agregando, setAgregando] = useState(false);
+  const [titulo, setTitulo] = useState('');
+  const [enlace, setEnlace] = useState('');
+  const [error, setError] = useState('');
+
+  if (!visible) return null;
+
+  const documentos = documentosEvento.filter(documento => documento.eventoId === eventoId);
+
+  const guardar = () => {
+    if (!titulo.trim()) {
+      setError('Indica un nombre para el documento.');
+      return;
+    }
+    if (!esEnlaceValido(enlace)) {
+      setError('El enlace no es válido. Debe comenzar con http:// o https://');
+      return;
+    }
+
+    agregarDocumentoEvento(eventoId, {
+      titulo: titulo.trim(),
+      enlaceUrl: normalizarEnlace(enlace),
+      fechaCarga: new Date().toISOString()
+    });
+    setTitulo('');
+    setEnlace('');
+    setError('');
+    setAgregando(false);
+  };
+
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setDesplegado(actual => !actual)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left bg-white hover:bg-slate-50 transition-colors"
+      >
+        <span className="flex items-center gap-2 text-xs font-bold text-slate-800">
+          <FolderOpen className="w-4 h-4 text-[#0077B6]" />
+          Documentos del evento
+        </span>
+        <span className="text-[11px] font-bold text-[#0077B6] bg-sky-50 border border-sky-100 rounded-lg px-2 py-0.5">
+          {documentos.length}
+        </span>
+      </button>
+
+      {desplegado && (
+        <div className="p-3 border-t border-slate-100 bg-slate-50/50 space-y-2">
+          {documentos.length === 0 ? (
+            <p className="text-[11px] text-slate-500 text-center py-1.5">
+              No hay documentos asociados a esta actividad.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {documentos.map(documento => (
+                <div key={documento.id} className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-white border border-slate-200/80">
+                  <div className="min-w-0">
+                    <a
+                      href={documento.enlaceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-bold text-slate-800 hover:text-[#0077B6] inline-flex items-center gap-1"
+                    >
+                      <span className="truncate">{documento.titulo}</span>
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">{detectarServicio(documento.enlaceUrl)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`¿Eliminar el enlace “${documento.titulo}”?`)) eliminarDocumentoEvento(documento.id);
+                    }}
+                    title="Eliminar documento"
+                    className="p-1.5 text-slate-400 hover:text-[#8B1E2B] hover:bg-rose-50 rounded-lg"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {agregando ? (
+            <div className="p-3 rounded-lg bg-white border border-sky-200 space-y-2">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">Nombre *</label>
+                <input
+                  autoFocus
+                  type="text"
+                  value={titulo}
+                  onChange={event => setTitulo(event.target.value)}
+                  placeholder="Ej. Carta de solicitud"
+                  className="w-full px-2.5 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#0099DD]"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">Link de Google Drive *</label>
+                <input
+                  type="text"
+                  value={enlace}
+                  onChange={event => setEnlace(event.target.value)}
+                  placeholder="https://drive.google.com/..."
+                  className="w-full px-2.5 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#0099DD]"
+                />
+                {pareceEnlacePrivado(enlace) && (
+                  <p className="flex items-start gap-1 text-[10px] text-amber-700 mt-1">
+                    <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                    Revisa los permisos de Drive antes de compartir el enlace.
+                  </p>
+                )}
+              </div>
+              {error && <p className="text-[11px] text-rose-700">{error}</p>}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAgregando(false);
+                    setError('');
+                  }}
+                  className="px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={guardar}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-bold bg-[#0077B6] hover:bg-[#0068A0] text-white rounded-lg"
+                >
+                  <Link2 className="w-3 h-3" />
+                  Guardar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAgregando(true)}
+              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-[11px] font-bold text-[#0077B6] bg-white hover:bg-sky-50 border border-sky-200 rounded-lg"
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              Agregar documento
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, solicitarNuevoEvento, navegacionInicial }) => {
   const {
     eventos,
     tiposEventos,
@@ -52,18 +220,13 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
   const [modalNuevoEvento, setModalNuevoEvento] = useState(false);
   const [modalEditarEvento, setModalEditarEvento] = useState<Evento | null>(null);
   const [modalArmarListaPendiente, setModalArmarListaPendiente] = useState<Evento | null>(null);
-
-  // Permite abrir el modal de nueva actividad desde otras secciones (ej. Asistencia)
-  useEffect(() => {
-    if (solicitarNuevoEvento) {
-      setEsPeriodico(false);
-      setModalNuevoEvento(true);
-    }
-  }, [solicitarNuevoEvento]);
-  const [copiadoToast, setCopiadoToast] = useState(false);
+  const [modalEnviarCalendario, setModalEnviarCalendario] = useState(false);
 
   // Navegación de Mes y Año para Calendario y Lista
-  const [fechaActualNavegacion, setFechaActualNavegacion] = useState(new Date(2026, 8, 1)); // Septiembre 2026
+  const [fechaActualNavegacion, setFechaActualNavegacion] = useState(() => {
+    const hoy = new Date();
+    return new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  });
 
   // Formulario nuevo evento
   const [nuevoTitulo, setNuevoTitulo] = useState('');
@@ -102,6 +265,38 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
   const [editDejarListaPendiente, setEditDejarListaPendiente] = useState(false);
   const [editAlcance, setEditAlcance] = useState<'soloEste' | 'futuros'>('soloEste');
 
+  // Permite abrir el modal de nueva actividad desde otras secciones (ej. Asistencia)
+  useEffect(() => {
+    if (solicitarNuevoEvento) {
+      // El contador es una orden externa desde Asistencia; sincroniza la
+      // apertura del formulario sólo cuando cambia.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setEsPeriodico(false);
+      setModalNuevoEvento(true);
+    }
+  }, [solicitarNuevoEvento]);
+
+  // Accesos desde Inicio: abren el calendario con el tipo ya filtrado y en el
+  // mes de la próxima actividad relevante.
+  useEffect(() => {
+    if (!navegacionInicial) return;
+    // La intención de navegación viene desde Inicio y debe reflejarse una vez
+    // que Agenda está montada.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFiltroTipo(navegacionInicial.tipo);
+    setModoVista('calendario');
+
+    const ahora = Date.now();
+    const candidatos = eventos
+      .filter(evento => normalizarTipoEvento(evento.tipo) === normalizarTipoEvento(navegacionInicial.tipo))
+      .sort((a, b) => new Date(a.fechaHoraInicio).getTime() - new Date(b.fechaHoraInicio).getTime());
+    const destino = candidatos.find(evento => new Date(evento.fechaHoraInicio).getTime() >= ahora) || candidatos[0];
+    const fechaDestino = destino ? new Date(destino.fechaHoraInicio) : new Date();
+    setFechaActualNavegacion(new Date(fechaDestino.getFullYear(), fechaDestino.getMonth(), 1));
+  }, [navegacionInicial, eventos]);
+  const [copiadoToast, setCopiadoToast] = useState(false);
+
+
   const diasSemana = [
     { num: 1, label: 'L', full: 'Lunes' },
     { num: 2, label: 'M', full: 'Martes' },
@@ -134,7 +329,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
   // Filtrado de eventos del mes actual en vista calendario y en lista según filtro
   const eventosFiltrados = eventos
     .filter(ev => {
-      if (filtroTipo !== 'Todos' && ev.tipo !== filtroTipo) return false;
+      if (filtroTipo !== 'Todos' && normalizarTipoEvento(ev.tipo) !== normalizarTipoEvento(filtroTipo)) return false;
       const f = new Date(ev.fechaHoraInicio);
       return f.getFullYear() === anioActual && f.getMonth() === mesActual;
     })
@@ -146,46 +341,17 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
   // Ajuste para semana comenzando en Lunes (0 = Lun ... 6 = Dom)
   const desfaseLunes = (primerDiaSemana + 6) % 7;
 
-  // Generador de Texto para WhatsApp (Regla: solo campos existentes)
-  const copiarParaWhatsApp = (ev: Evento) => {
-    const fechaObj = new Date(ev.fechaHoraInicio);
-    const opcionesFecha: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' };
-    const fechaTexto = fechaObj.toLocaleDateString('es-CL', opcionesFecha);
-    const horaTexto = fechaObj.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-
-    let texto = `*MINISTERIO VOCAL SOLÍ DEO*\n`;
-    texto += `*${ev.titulo.toUpperCase()}*\n`;
-    texto += `━━━━━━━━━━━━━━━━━━\n`;
-    texto += `📅 Fecha: ${fechaTexto}\n`;
-    texto += `⏰ Hora: ${horaTexto} hrs\n`;
-    texto += `📍 Lugar: ${ev.lugarNombre}\n`;
-
-    if (ev.direccion && ev.direccion.trim() !== '') {
-      texto += `🗺️ Dirección: ${ev.direccion}\n`;
+  // Comparte un único evento con el mismo formato limpio del calendario.
+  const copiarParaWhatsApp = async (ev: Evento) => {
+    try {
+      await navigator.clipboard.writeText(
+        ['*MINISTERIO VOCAL SOLÍ DEO*', '', formatearEventoParaWhatsApp(ev)].join('\n')
+      );
+      setCopiadoToast(true);
+      setTimeout(() => setCopiadoToast(false), 3000);
+    } catch {
+      alert('No fue posible copiar el texto. Intenta nuevamente.');
     }
-
-    if (ev.tipoConvocatoria === 'Todos') {
-      texto += `👥 Convocados: Todo el ministerio\n`;
-    } else if (ev.tipoConvocatoria === 'Por Cuerda' && ev.cuerdasConvocadas) {
-      texto += `👥 Convocados: ${ev.cuerdasConvocadas.join(', ')}\n`;
-    } else if (ev.tipoConvocatoria === 'Personalizada') {
-      if (ev.integrantesConvocadosIds && ev.integrantesConvocadosIds.length > 0) {
-        texto += `👥 Convocados: Citación especial (${ev.integrantesConvocadosIds.length} integrantes)\n`;
-      } else {
-        texto += `👥 Convocados: Citación especial (Lista pendiente de confirmación)\n`;
-      }
-    }
-
-    if (ev.notas && ev.notas.trim() !== '') {
-      texto += `📝 Nota: ${ev.notas}\n`;
-    }
-
-    texto += `━━━━━━━━━━━━━━━━━━\n`;
-    texto += `_Favor confirmar asistencia o gestionar justificativo en Solibook._`;
-
-    navigator.clipboard.writeText(texto);
-    setCopiadoToast(true);
-    setTimeout(() => setCopiadoToast(false), 3000);
   };
 
   const handleCrearEvento = (e: React.FormEvent) => {
@@ -363,13 +529,21 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
   };
 
   return (
-    <div className="space-y-4 max-w-4xl mx-auto pb-12">
+    <div className="space-y-4 max-w-4xl lg:max-w-7xl mx-auto pb-12">
       {/* Toast de Confirmación Copiado */}
       {copiadoToast && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white text-xs px-4 py-2 rounded-xl shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
           <Check className="w-4 h-4 text-emerald-400" />
           <span>¡Texto para WhatsApp copiado al portapapeles!</span>
         </div>
+      )}
+
+      {modalEnviarCalendario && (
+        <ModalEnviarCalendario
+          eventos={eventos}
+          tiposEventos={tiposEventos}
+          onCerrar={() => setModalEnviarCalendario(false)}
+        />
       )}
 
       {/* Barra de Filtros, Navegación de Mes y Acciones */}
@@ -440,6 +614,16 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
 
             {puede('crear_evento') && (
               <button
+                onClick={() => setModalEnviarCalendario(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Enviar calendario</span>
+              </button>
+            )}
+
+            {puede('crear_evento') && (
+              <button
                 onClick={() => {
                   setFechaUnica(new Date().toISOString().split('T')[0]);
                   setEsPeriodico(false);
@@ -472,12 +656,13 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
               const mes = fecha.toLocaleDateString('es-CL', { month: 'short' }).toUpperCase();
               const hora = fecha.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
               const tieneListaPendiente = ev.tipoConvocatoria === 'Personalizada' && (!ev.integrantesConvocadosIds || ev.integrantesConvocadosIds.length === 0);
+              const estilo = obtenerEstiloEvento(ev.tipo);
 
               return (
                 <div
                   key={ev.id}
                   onClick={() => setEventoSeleccionado(ev)}
-                  className="group bg-white hover:bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 shadow-xs hover:border-sky-300 transition-all cursor-pointer flex items-center justify-between gap-4"
+                  className={`group bg-white hover:bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 border-l-4 ${estilo.acento} shadow-xs hover:border-sky-300 transition-all cursor-pointer flex items-center justify-between gap-4`}
                 >
                   <div className="flex items-center gap-3.5">
                     <div className="w-13 h-13 rounded-2xl bg-gradient-to-b from-sky-50 to-white border border-sky-100 flex flex-col items-center justify-center shrink-0 text-center">
@@ -494,11 +679,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
 
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${
-                          ev.tipo === 'Ensayo' ? 'bg-sky-100/70 text-[#0077B6]' :
-                          ev.tipo === 'Presentación' ? 'bg-rose-100/70 text-[#8B1E2B]' :
-                          'bg-amber-100/70 text-amber-900'
-                        }`}>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${estilo.chip}`}>
                           {ev.tipo}
                         </span>
                         {ev.grupoRecurrenciaId && (
@@ -589,6 +770,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                 return f.getDate() === dia;
               });
               const cantidad = eventosDia.length;
+              const estiloUnico = cantidad === 1 ? obtenerEstiloEvento(eventosDia[0].tipo) : null;
 
               return (
                 <div
@@ -596,7 +778,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                   onClick={() => handleDiaCalendarioClick(dia)}
                   className={`p-2 rounded-xl border flex flex-col items-center justify-center min-h-[56px] transition-all cursor-pointer ${
                     cantidad > 0
-                      ? 'bg-sky-50/70 border-sky-300 text-[#0077B6] font-bold shadow-xs hover:scale-105'
+                      ? `${estiloUnico?.calendario || 'bg-slate-50 border-slate-300 text-slate-700'} font-bold shadow-xs hover:scale-105`
                       : 'border-slate-100 hover:bg-slate-100/70 text-slate-700'
                   }`}
                   title={cantidad === 0 ? 'Clic para programar actividad este día' : `${cantidad} actividades`}
@@ -604,10 +786,13 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                   <span>{dia}</span>
                   {cantidad > 0 ? (
                     <div className="flex items-center gap-0.5 mt-1">
-                      {Array.from({ length: Math.min(cantidad, 3) }).map((_, dotIdx) => (
-                        <span key={dotIdx} className="w-1.5 h-1.5 rounded-full bg-[#0099DD]" />
+                      {eventosDia.slice(0, 3).map(evento => (
+                        <span
+                          key={evento.id}
+                          className={`w-1.5 h-1.5 rounded-full ${obtenerEstiloEvento(evento.tipo).punto}`}
+                        />
                       ))}
-                      {cantidad > 3 && <span className="text-[9px] text-[#0099DD] font-bold">+</span>}
+                      {cantidad > 3 && <span className="text-[9px] text-slate-500 font-bold">+</span>}
                     </div>
                   ) : (
                     <span className="text-[9px] text-slate-300 opacity-0 hover:opacity-100 mt-1 font-semibold">+</span>
@@ -622,12 +807,12 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
       {/* MODAL DETALLES DEL EVENTO */}
       {eventoSeleccionado && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-md overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="p-5 space-y-4">
               <div className="flex items-start justify-between">
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#0099DD] bg-sky-50 px-2 py-0.5 rounded-md">
+                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${obtenerEstiloEvento(eventoSeleccionado.tipo).chip}`}>
                       {eventoSeleccionado.tipo}
                     </span>
                     {eventoSeleccionado.grupoRecurrenciaId && (
@@ -718,10 +903,16 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                 </div>
                 {eventoSeleccionado.notas && (
                   <div className="pt-2 border-t border-slate-200/60 text-slate-700 italic">
-                    "{eventoSeleccionado.notas}"
+                    &quot;{eventoSeleccionado.notas}&quot;
                   </div>
                 )}
               </div>
+
+              <PanelDocumentosEvento
+                key={eventoSeleccionado.id}
+                eventoId={eventoSeleccionado.id}
+                visible={puede('editar_evento')}
+              />
 
               {/* Botones de acción principales */}
               <div className="flex items-center gap-2 pt-1">
@@ -809,7 +1000,7 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
                   className="p-3 bg-slate-50 hover:bg-sky-50 border border-slate-200/70 hover:border-sky-300 rounded-xl cursor-pointer transition-all flex items-center justify-between"
                 >
                   <div>
-                    <span className="text-[10px] font-bold text-[#0099DD] uppercase">{ev.tipo}</span>
+                    <span className={`text-[10px] font-bold uppercase ${obtenerEstiloEvento(ev.tipo).clave === 'concierto' ? 'text-[#805300]' : obtenerEstiloEvento(ev.tipo).clave === 'presentacion' ? 'text-[#9F1239]' : 'text-[#0077B6]'}`}>{ev.tipo}</span>
                     <h4 className="text-xs font-bold text-slate-800 mt-0.5">{ev.titulo}</h4>
                     <span className="text-[10px] text-slate-500">
                       {new Date(ev.fechaHoraInicio).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs • {ev.lugarNombre}

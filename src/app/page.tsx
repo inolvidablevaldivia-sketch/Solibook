@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AppProvider } from '@/context/AppContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { Header } from '@/components/Header';
@@ -8,7 +8,7 @@ import { BottomNav } from '@/components/BottomNav';
 import { ModalNotificaciones } from '@/components/ModalNotificaciones';
 import { PantallaLogin } from '@/components/PantallaLogin';
 import { VistaInicio } from '@/components/VistaInicio';
-import { VistaAgenda } from '@/components/VistaAgenda';
+import { VistaAgenda, NavegacionInicialAgenda } from '@/components/VistaAgenda';
 import { VistaAsistencia } from '@/components/VistaAsistencia';
 import { VistaLibros } from '@/components/VistaLibros';
 import { VistaDirectorio } from '@/components/VistaDirectorio';
@@ -17,7 +17,8 @@ import { VistaActas } from '@/components/VistaActas';
 import { VistaDocumentos } from '@/components/VistaDocumentos';
 import { VistaUsuarios } from '@/components/VistaUsuarios';
 import { VistaDashboardPC } from '@/components/VistaDashboardPC';
-import { Loader2, Lock } from 'lucide-react';
+import { Loader2, Lock, LogOut } from 'lucide-react';
+import { instalarEscuchaPushEnPrimerPlano } from '@/lib/notificacionesPush';
 
 const AppShell: React.FC = () => {
   const { usuario, cargando, puede } = useAuth();
@@ -26,10 +27,57 @@ const AppShell: React.FC = () => {
   const [eventoParaAsistencia, setEventoParaAsistencia] = useState<string | undefined>(undefined);
   const [modalNotificacionesAbierto, setModalNotificacionesAbierto] = useState(false);
   const [solicitarNuevoEvento, setSolicitarNuevoEvento] = useState(0);
+  const [navegacionAgenda, setNavegacionAgenda] = useState<NavegacionInicialAgenda | undefined>(undefined);
+  const [confirmarSalida, setConfirmarSalida] = useState(false);
+  const historialInicializado = useRef(false);
+  const permitirSalida = useRef(false);
+
+  const navegarA = useCallback((vista: string) => {
+    if (vista === vistaActual) return;
+    setVistaActual(vista);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ solibook: true, vista }, '', window.location.href);
+    }
+  }, [vistaActual]);
+
+  // Una entrada de seguridad permite interceptar "Atrás" desde Inicio y pedir
+  // confirmación antes de abandonar la PWA. Las vistas internas usan historial
+  // real, por lo que Atrás sigue funcionando como navegación normal.
+  useEffect(() => {
+    if (!historialInicializado.current) {
+      window.history.replaceState({ solibook: true, limiteSalida: true }, '', window.location.href);
+      window.history.pushState({ solibook: true, vista: 'inicio' }, '', window.location.href);
+      historialInicializado.current = true;
+    }
+
+    const manejarAtras = (event: PopStateEvent) => {
+      const estado = event.state as { solibook?: boolean; vista?: string; limiteSalida?: boolean } | null;
+      if (estado?.limiteSalida) {
+        if (permitirSalida.current) return;
+        setVistaActual('inicio');
+        setConfirmarSalida(true);
+        window.setTimeout(() => window.history.go(1), 0);
+        return;
+      }
+      if (estado?.solibook && estado.vista) setVistaActual(estado.vista);
+    };
+
+    window.addEventListener('popstate', manejarAtras);
+    return () => window.removeEventListener('popstate', manejarAtras);
+  }, []);
+
+  useEffect(() => {
+    if (usuario?.uid) void instalarEscuchaPushEnPrimerPlano();
+  }, [usuario?.uid]);
 
   const irAPasarLista = (eventoId: string) => {
     setEventoParaAsistencia(eventoId);
-    setVistaActual('asistencia');
+    navegarA('asistencia');
+  };
+
+  const abrirAgendaFiltrada = (tipo: string) => {
+    setNavegacionAgenda({ id: Date.now(), tipo });
+    navegarA('agenda');
   };
 
   // Cada vista exige su permiso; si el rol no lo tiene se muestra un aviso.
@@ -48,9 +96,9 @@ const AppShell: React.FC = () => {
   // Al cambiar de rol, si la vista abierta deja de estar permitida se vuelve al inicio
   useEffect(() => {
     const validador = permisoDeVista[vistaActual];
-    if (validador && !validador()) setVistaActual('inicio');
+    if (validador && !validador()) queueMicrotask(() => navegarA('inicio'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usuario?.rol, usuario?.activo, vistaActual]);
+  }, [usuario?.rol, usuario?.activo, vistaActual, navegarA]);
 
   if (cargando) {
     return (
@@ -76,7 +124,7 @@ const AppShell: React.FC = () => {
       {/* Cabecera Fija */}
       <Header
         vistaActual={vistaActual}
-        setVistaActual={setVistaActual}
+        setVistaActual={navegarA}
         onAbrirNotificaciones={() => setModalNotificacionesAbierto(true)}
       />
 
@@ -93,7 +141,7 @@ const AppShell: React.FC = () => {
               directiva del ministerio.
             </p>
             <button
-              onClick={() => setVistaActual('inicio')}
+              onClick={() => navegarA('inicio')}
               className="mt-4 px-4 py-2 rounded-xl bg-[#0099DD] hover:bg-[#0088cc] text-white text-xs font-bold transition-colors"
             >
               Volver al inicio
@@ -102,11 +150,19 @@ const AppShell: React.FC = () => {
         ) : (
           <>
             {vistaActual === 'inicio' && (
-              <VistaInicio setVistaActual={setVistaActual} onIniciarAsistencia={irAPasarLista} />
+              <VistaInicio
+                setVistaActual={navegarA}
+                onIniciarAsistencia={irAPasarLista}
+                onAbrirAgendaFiltrada={abrirAgendaFiltrada}
+              />
             )}
 
             {vistaActual === 'agenda' && (
-              <VistaAgenda onIniciarAsistencia={irAPasarLista} solicitarNuevoEvento={solicitarNuevoEvento} />
+              <VistaAgenda
+                onIniciarAsistencia={irAPasarLista}
+                solicitarNuevoEvento={solicitarNuevoEvento}
+                navegacionInicial={navegacionAgenda}
+              />
             )}
 
             {vistaActual === 'asistencia' && (
@@ -114,17 +170,17 @@ const AppShell: React.FC = () => {
                 eventoIdInicial={eventoParaAsistencia}
                 onVolver={() => {
                   setEventoParaAsistencia(undefined);
-                  setVistaActual('agenda');
+                  navegarA('agenda');
                 }}
                 onCrearEvento={() => {
                   setSolicitarNuevoEvento(n => n + 1);
-                  setVistaActual('agenda');
+                  navegarA('agenda');
                 }}
               />
             )}
 
             {vistaActual === 'libros' && (
-              <VistaLibros onCrearEventoDesdeCarta={() => setVistaActual('agenda')} />
+              <VistaLibros onCrearEventoDesdeCarta={() => navegarA('agenda')} />
             )}
 
             {vistaActual === 'dashboard' && <VistaDashboardPC />}
@@ -132,7 +188,7 @@ const AppShell: React.FC = () => {
             {/* Vistas alcanzables desde dentro de Libros y desde el Header */}
             {vistaActual === 'directorio' && <VistaDirectorio />}
             {vistaActual === 'cartas' && (
-              <VistaCartas onCrearEventoDesdeCarta={() => setVistaActual('agenda')} />
+              <VistaCartas onCrearEventoDesdeCarta={() => navegarA('agenda')} />
             )}
             {vistaActual === 'actas' && <VistaActas />}
             {vistaActual === 'documentos' && <VistaDocumentos />}
@@ -141,14 +197,52 @@ const AppShell: React.FC = () => {
         )}
       </main>
 
+      {confirmarSalida && (
+        <div className="fixed inset-0 z-70 flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-xs">
+          <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl border border-slate-200 p-5">
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-[#8B1E2B] flex items-center justify-center mb-3">
+              <LogOut className="w-5 h-5" />
+            </div>
+            <h2 className="text-base font-bold text-slate-900">¿Quieres salir de Solibook?</h2>
+            <p className="text-xs text-slate-500 leading-relaxed mt-1.5">
+              Puedes cancelar para seguir usando la aplicación.
+            </p>
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                onClick={() => setConfirmarSalida(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmarSalida(false);
+                  permitirSalida.current = true;
+                  window.history.go(-2);
+                  window.setTimeout(() => {
+                    window.close();
+                    // Si el navegador no permite cerrar una PWA/tabs desde
+                    // JavaScript, se restaura la protección para el siguiente Atrás.
+                    permitirSalida.current = false;
+                  }, 250);
+                }}
+                className="px-4 py-2 text-xs font-bold bg-[#8B1E2B] hover:bg-[#721823] text-white rounded-xl"
+              >
+                Salir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Barra de Navegación Inferior (Móvil PWA) */}
-      <BottomNav vistaActual={vistaActual} setVistaActual={setVistaActual} />
+      <BottomNav vistaActual={vistaActual} setVistaActual={navegarA} />
 
       {/* Centro de Notificaciones y Acuse de Recibo */}
       <ModalNotificaciones
         isOpen={modalNotificacionesAbierto}
         onClose={() => setModalNotificacionesAbierto(false)}
-        onIrAEvento={() => setVistaActual('agenda')}
+        onIrAEvento={() => navegarA('agenda')}
       />
     </div>
   );

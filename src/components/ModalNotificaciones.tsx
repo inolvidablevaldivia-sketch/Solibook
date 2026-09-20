@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { activarNotificacionesPush, EstadoPush } from '@/lib/notificacionesPush';
 import {
   Bell,
   X,
@@ -13,7 +14,8 @@ import {
   XCircle,
   Eye,
   PlusCircle,
-  Clock
+  Clock,
+  BellRing
 } from 'lucide-react';
 
 interface ModalNotificacionesProps {
@@ -32,9 +34,11 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
     marcarCartaLeida,
     usuarioActivo
   } = useApp();
-  const { puede } = useAuth();
+  const { puede, usuario } = useAuth();
 
   const [filtro, setFiltro] = useState<'Todos' | 'Justificaciones' | 'Cartas' | 'Actas'>('Todos');
+  const [estadoPush, setEstadoPush] = useState<EstadoPush | null>(null);
+  const [activandoPush, setActivandoPush] = useState(false);
 
   if (!isOpen) return null;
 
@@ -85,6 +89,44 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
           ))}
         </div>
 
+        {puede('ver_miembros') && (
+          <div className="mx-4 mt-3 p-3 rounded-xl bg-sky-50/70 border border-sky-100 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2 min-w-0">
+              <BellRing className="w-4 h-4 text-[#0077B6] mt-0.5 shrink-0" />
+              <div>
+                <p className="text-xs font-bold text-slate-800">Recordatorios en este teléfono</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Activa avisos de cumpleaños aunque Solibook esté cerrada.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={activandoPush || !usuario}
+              onClick={async () => {
+                if (!usuario) return;
+                setActivandoPush(true);
+                setEstadoPush(await activarNotificacionesPush(usuario.uid));
+                setActivandoPush(false);
+              }}
+              className="px-3 py-1.5 text-[11px] font-bold text-white bg-[#0077B6] hover:bg-[#0068A0] disabled:bg-slate-300 rounded-lg shrink-0"
+            >
+              {activandoPush ? 'Activando...' : estadoPush === 'activo' ? 'Avisos activos' : 'Activar avisos'}
+            </button>
+            {estadoPush && estadoPush !== 'activo' && (
+              <p className="w-full text-[10px] text-amber-800">
+                {estadoPush === 'denegado'
+                  ? 'Las notificaciones fueron bloqueadas. Habilítalas desde los ajustes del navegador o de la app.'
+                  : estadoPush === 'sin_configuracion'
+                    ? 'Falta la configuración de notificaciones push en la publicación. Revisa la guía de despliegue.'
+                    : estadoPush === 'no_soportado'
+                      ? 'Este navegador no admite avisos push.'
+                      : 'No fue posible activar los avisos. Intenta nuevamente.'}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Lista de Contenido */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 divide-y divide-slate-100">
           {/* Sección Dinámica: Justificaciones Pendientes */}
@@ -100,7 +142,7 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <span className="text-xs font-semibold text-slate-800">Justificativo de Inasistencia</span>
-                        <p className="text-xs text-slate-600 mt-0.5">"{j.motivo}"</p>
+                        <p className="text-xs text-slate-600 mt-0.5">&quot;{j.motivo}&quot;</p>
                       </div>
                       <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold bg-amber-200/60 text-amber-900">
                         Pendiente

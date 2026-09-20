@@ -11,7 +11,8 @@ import {
   NotificacionItem,
   EstadoAsistencia,
   DocumentoInstitucional,
-  DocumentoAdjunto
+  DocumentoAdjunto,
+  DocumentoEvento
 } from '@/types';
 import {
   INTEGRANTES_INICIALES,
@@ -35,6 +36,7 @@ import {
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
+import { obtenerProximoCumpleanos } from '@/lib/cumpleanos';
 
 interface AppContextType {
   // Integrantes
@@ -85,12 +87,15 @@ interface AppContextType {
   notificaciones: NotificacionItem[];
   marcarNotificacionLeida: (id: string) => void;
 
-  // Documentos institucionales y de miembros
+  // Documentos institucionales, de miembros y de eventos
   documentos: DocumentoInstitucional[];
   agregarDocumento: (nuevo: Omit<DocumentoInstitucional, 'id'>) => void;
   eliminarDocumento: (id: string) => void;
   agregarDocumentoMiembro: (integranteId: string, doc: Omit<DocumentoAdjunto, 'id'>) => void;
   eliminarDocumentoMiembro: (integranteId: string, docId: string) => void;
+  documentosEvento: DocumentoEvento[];
+  agregarDocumentoEvento: (eventoId: string, doc: Omit<DocumentoEvento, 'id' | 'eventoId'>) => void;
+  eliminarDocumentoEvento: (id: string) => void;
 
   // Utilidades PWA
   forzarActualizacionApp: () => void;
@@ -103,6 +108,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 const TIPOS_EVENTOS_BASE = [
   'Ensayo',
   'Presentación',
+  'Concierto',
   'Reunión',
   'Administrativo',
   'Otro'
@@ -248,11 +254,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [justificaciones, setJustificaciones] = useState<Justificacion[]>([]);
   const [notificaciones, setNotificaciones] = useState<NotificacionItem[]>([]);
   const [documentos, setDocumentos] = useState<DocumentoInstitucional[]>([]);
+  const [documentosEvento, setDocumentosEvento] = useState<DocumentoEvento[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
   // Identidad de sincronización: al iniciar o cerrar sesión se rearman las
   // suscripciones a Firestore (las reglas pueden exigir usuario autenticado).
-  const { usuario, modoLocal } = useAuth();
+  const { usuario, modoLocal, puede } = useAuth();
   const claveSync = modoLocal ? 'modo-local' : (usuario?.uid ?? 'sin-sesion');
 
   const [usuarioActivo, setUsuarioActivo] = useState({
@@ -272,6 +279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const justificacionesRef = useRef<Justificacion[]>([]);
   const notificacionesRef = useRef<NotificacionItem[]>([]);
   const documentosRef = useRef<DocumentoInstitucional[]>([]);
+  const documentosEventoRef = useRef<DocumentoEvento[]>([]);
 
   useEffect(() => {
     integrantesRef.current = integrantes;
@@ -283,6 +291,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     justificacionesRef.current = justificaciones;
     notificacionesRef.current = notificaciones;
     documentosRef.current = documentos;
+    documentosEventoRef.current = documentosEvento;
   });
 
   // Carga inicial persistente de LocalStorage (respaldo y modo sin conexión)
@@ -297,6 +306,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const storedJust = localStorage.getItem('solibook_justificaciones');
       const storedNot = localStorage.getItem('solibook_notificaciones');
       const storedDocs = localStorage.getItem('solibook_documentos');
+      const storedDocsEvento = localStorage.getItem('solibook_documentos_evento');
 
       const dataIntegrantes: Integrante[] = storedInt ? JSON.parse(storedInt) : INTEGRANTES_INICIALES;
       const dataEventos: Evento[] = storedEv ? JSON.parse(storedEv) : EVENTOS_INICIALES;
@@ -313,6 +323,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setJustificaciones(storedJust ? JSON.parse(storedJust) : JUSTIFICACIONES_INICIALES);
       setNotificaciones(storedNot ? JSON.parse(storedNot) : NOTIFICACIONES_INICIALES);
       setDocumentos(storedDocs ? JSON.parse(storedDocs) : []);
+      setDocumentosEvento(storedDocsEvento ? JSON.parse(storedDocsEvento) : []);
     } catch {
       const base = [...INTEGRANTES_INICIALES].sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
       setIntegrantes(base);
@@ -324,6 +335,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setJustificaciones(JUSTIFICACIONES_INICIALES);
       setNotificaciones(NOTIFICACIONES_INICIALES);
       setDocumentos([]);
+      setDocumentosEvento([]);
     }
     setIsLoaded(true);
   }, []);
@@ -424,6 +436,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         undefined,
         alSerRestringida(() => setDocumentos([]))
       ),
+      suscribirseColeccion<DocumentoEvento>(
+        COLECCIONES.documentosEvento,
+        items => setDocumentosEvento(items),
+        () => documentosEventoRef.current,
+        undefined,
+        alSerRestringida(() => setDocumentosEvento([]))
+      ),
       suscribirseDocumento<{ tiposEventos?: string[] }>(
         DOC_CONFIG_GENERAL.coleccion,
         DOC_CONFIG_GENERAL.id,
@@ -466,52 +485,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('solibook_justificaciones', JSON.stringify(justificaciones));
       localStorage.setItem('solibook_notificaciones', JSON.stringify(notificaciones));
       localStorage.setItem('solibook_documentos', JSON.stringify(documentos));
+      localStorage.setItem('solibook_documentos_evento', JSON.stringify(documentosEvento));
     } catch (e) {
       console.error('Error persistiendo datos:', e);
     }
-  }, [integrantes, eventos, tiposEventos, asistencias, cartas, actas, justificaciones, notificaciones, documentos, isLoaded]);
+  }, [integrantes, eventos, tiposEventos, asistencias, cartas, actas, justificaciones, notificaciones, documentos, documentosEvento, isLoaded]);
 
-  // Aviso automático de cumpleaños: recorre los miembros activos con fecha de
-  // nacimiento y avisa cuando el próximo cumpleaños está a 7 días o menos.
-  // Usa un identificador estable para no duplicar la notificación.
+  // Aviso interno de cumpleaños: aparece una sola vez desde siete días antes.
+  // El envío push del día exacto se ejecuta desde /api/cron/cumpleanos.
   useEffect(() => {
-    if (!isLoaded) return;
-
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
+    // Los avisos de cumpleaños son parte de la coordinación interna; el rol
+    // Miembro no lee el centro de notificaciones ni crea avisos compartidos.
+    if (!isLoaded || !puede('ver_miembros')) return;
 
     const porAvisar: NotificacionItem[] = [];
 
     integrantes
       .filter(i => i.estado === 'Activo' && i.fechaNacimiento)
       .forEach(i => {
-        const partes = (i.fechaNacimiento as string).split('-').map(Number);
-        if (partes.length !== 3 || partes.some(n => Number.isNaN(n))) return;
-        const [anioNac, mesNac, diaNac] = partes;
+        const proximo = obtenerProximoCumpleanos(i.fechaNacimiento);
+        if (!proximo || proximo.diasRestantes > 7) return;
 
-        // Próximo cumpleaños considerando que el 29 de febrero cae el 28 en años no bisiestos
-        let proximo = new Date(hoy.getFullYear(), mesNac - 1, diaNac);
-        if (proximo.getTime() < hoy.getTime()) {
-          proximo = new Date(hoy.getFullYear() + 1, mesNac - 1, diaNac);
-        }
-        const diasRestantes = Math.round((proximo.getTime() - hoy.getTime()) / 86400000);
-        if (diasRestantes > 7) return;
-
-        const idEstable = `cumple-${i.id}-${proximo.getFullYear()}`;
-        const fechaTexto = proximo.toLocaleDateString('es-CL', { day: '2-digit', month: 'long' });
+        const idEstable = `cumple-${i.id}-${proximo.fecha.getFullYear()}`;
+        const fechaTexto = proximo.fecha.toLocaleDateString('es-CL', { day: '2-digit', month: 'long' });
 
         porAvisar.push({
           id: idEstable,
           tipo: 'Calendario',
           titulo:
-            diasRestantes === 0
+            proximo.diasRestantes === 0
               ? `Hoy cumple años ${i.nombreCompleto}`
               : `Cumpleaños de ${i.nombreCompleto}`,
           mensaje:
-            diasRestantes === 0
-              ? `Cumple ${proximo.getFullYear() - anioNac} años hoy.`
-              : `Cumple años el ${fechaTexto} (en ${diasRestantes} día${diasRestantes === 1 ? '' : 's'}).`,
-          fecha: diasRestantes === 0 ? 'Hoy' : `En ${diasRestantes} día${diasRestantes === 1 ? '' : 's'}`,
+            proximo.diasRestantes === 0
+              ? `Cumple ${proximo.fecha.getFullYear() - proximo.anioNacimiento} años hoy.`
+              : `Cumple años el ${fechaTexto} (en ${proximo.diasRestantes} día${proximo.diasRestantes === 1 ? '' : 's'}).`,
+          fecha:
+            proximo.diasRestantes === 0
+              ? 'Hoy'
+              : `En ${proximo.diasRestantes} día${proximo.diasRestantes === 1 ? '' : 's'}`,
           leido: false,
           accionId: i.id
         });
@@ -520,10 +532,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nuevas = porAvisar.filter(n => !notificaciones.some(existente => existente.id === n.id));
     if (nuevas.length > 0) {
       setNotificaciones(prev => [...prev, ...nuevas]);
-      // Los IDs son estables, así que todos los dispositivos comparten el mismo aviso
+      // Los IDs son estables, así que todos los dispositivos comparten el mismo aviso.
       nuevas.forEach(n => void guardarDocumento(COLECCIONES.notificaciones, n.id, n));
     }
-  }, [integrantes, notificaciones, isLoaded]);
+  }, [integrantes, notificaciones, isLoaded, puede]);
 
   // Funciones de Integrantes
   const agregarIntegrante = (nuevo: Omit<Integrante, 'id'>) => {
@@ -593,8 +605,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const eliminarEvento = (id: string, borrarFuturosDelGrupo: boolean = false) => {
     const { siguiente, eliminados } = calcularEliminacionEvento(eventosRef.current, id, borrarFuturosDelGrupo);
+    const idsEventosEliminados = new Set(eliminados);
+    const documentosEliminados = documentosEventoRef.current
+      .filter(documento => idsEventosEliminados.has(documento.eventoId))
+      .map(documento => documento.id);
     setEventos(siguiente);
+    setDocumentosEvento(prev => prev.filter(documento => !idsEventosEliminados.has(documento.eventoId)));
     void eliminarDocumentosFirestore(COLECCIONES.eventos, eliminados);
+    void eliminarDocumentosFirestore(COLECCIONES.documentosEvento, documentosEliminados);
   };
 
   // Funciones de Asistencias
@@ -928,6 +946,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void eliminarDocumentoFirestore(COLECCIONES.documentos, id);
   };
 
+  // Documentos de un evento: se almacenan fuera de los eventos para que las
+  // reglas de Firestore puedan impedir que el rol Miembro vea enlaces sensibles.
+  const agregarDocumentoEvento = (
+    eventoId: string,
+    docAdjunto: Omit<DocumentoEvento, 'id' | 'eventoId'>
+  ) => {
+    const nuevo: DocumentoEvento = { ...docAdjunto, eventoId, id: `doce-${Date.now()}` };
+    setDocumentosEvento(prev => [...prev, nuevo]);
+    void guardarDocumento(COLECCIONES.documentosEvento, nuevo.id, nuevo);
+  };
+
+  const eliminarDocumentoEvento = (id: string) => {
+    setDocumentosEvento(prev => prev.filter(documento => documento.id !== id));
+    void eliminarDocumentoFirestore(COLECCIONES.documentosEvento, id);
+  };
+
   // Documentos de respaldo de un miembro (se guardan dentro de su ficha)
   const agregarDocumentoMiembro = (integranteId: string, docAdjunto: Omit<DocumentoAdjunto, 'id'>) => {
     const nuevo: DocumentoAdjunto = { ...docAdjunto, id: `docm-${Date.now()}` };
@@ -968,13 +1002,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           names.forEach(name => caches.delete(name));
         });
       }
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(registrations => {
-          for (const registration of registrations) {
-            registration.unregister();
-          }
-        });
-      }
+      // No se desregistran service workers: el de Firebase Messaging mantiene
+      // los avisos de cumpleaños aun cuando se refresca la interfaz.
       window.location.reload();
     }
   };
@@ -1021,6 +1050,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         eliminarDocumento,
         agregarDocumentoMiembro,
         eliminarDocumentoMiembro,
+        documentosEvento,
+        agregarDocumentoEvento,
+        eliminarDocumentoEvento,
         forzarActualizacionApp,
         usuarioActivo,
         setUsuarioActivo

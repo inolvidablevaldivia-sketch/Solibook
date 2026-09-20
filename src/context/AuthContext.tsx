@@ -14,6 +14,7 @@ import { doc, runTransaction } from 'firebase/firestore';
 import { UsuarioApp, RolUsuario } from '@/types';
 import { Permiso, tienePermiso, normalizarRol, ROLES_SUPERIORES } from '@/lib/permisos';
 import { COLECCIONES, suscribirseColeccion, guardarDocumento } from '@/lib/firestoreSync';
+import { retirarNotificacionesPush } from '@/lib/notificacionesPush';
 
 const CLAVE_USUARIOS = 'solibook_usuarios';
 const CLAVE_SESION_LOCAL = 'solibook_sesion_local';
@@ -252,6 +253,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const cerrarSesion = async () => {
     try {
+      if (!modoLocal && usuario?.uid) void retirarNotificacionesPush(usuario.uid);
       if (!modoLocal) await signOut(auth);
     } catch {
       // Si Firebase no responde se limpia igualmente la sesión local

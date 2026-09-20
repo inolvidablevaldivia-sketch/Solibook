@@ -74,18 +74,18 @@ export const VistaLibros: React.FC<VistaLibrosProps> = ({ onCrearEventoDesdeCart
   }
 
   return (
-    <div className="space-y-3 max-w-3xl mx-auto pb-16">
-      <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-        <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-          <BookOpen className="w-4 h-4 text-[#0099DD]" />
+    <div className="space-y-3 max-w-3xl lg:max-w-6xl mx-auto pb-16">
+      <header className="px-1 pt-1 pb-2">
+        <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+          <BookOpen className="w-5 h-5 text-[#0099DD]" />
           Libros
         </h2>
-        <p className="text-xs text-slate-400 mt-0.5">
-          Índice de los libros oficiales del Ministerio Vocal Solí Deo
+        <p className="text-xs text-slate-500 mt-1">
+          Índice de los registros institucionales del Ministerio Vocal Solí Deo
         </p>
-      </div>
+      </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {LIBROS.map(libro => {
           const Icon = libro.icon;
           return (

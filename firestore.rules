@@ -223,6 +223,25 @@ service cloud.firestore {
       allow delete: if tieneAcuseYEliminaDocs();
     }
 
+    // Adjuntos de actividades: se mantienen fuera de /eventos para que el
+    // rol Miembro pueda consultar el calendario sin obtener enlaces a cartas,
+    // autorizaciones u otros antecedentes administrativos.
+    match /documentos_evento/{id} {
+      allow read, create, update, delete: if esGestion();
+    }
+
+    // Un dispositivo sólo registra o elimina su propio token de push. La
+    // lectura global y el envío los ejecuta Firebase Admin desde el cron,
+    // que no está sujeto a estas reglas.
+    match /dispositivos_notificaciones/{id} {
+      allow create: if activo() && request.resource.data.uid == request.auth.uid;
+      allow get, delete: if activo() && resource.data.uid == request.auth.uid;
+      allow update: if activo()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow list: if false;
+    }
+
     // ──────────────────────── Avisos ────────────────────────
 
     match /notificaciones/{id} {
