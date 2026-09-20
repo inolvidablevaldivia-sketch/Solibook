@@ -75,8 +75,24 @@ const AppShell: React.FC = () => {
     navegarA('asistencia');
   };
 
+  // Cada intención de navegación hacia Agenda recibe un identificador propio
+  // (contador de sesión) para que Agenda sepa que es una orden nueva.
+  const contadorNavegacionAgenda = useRef(0);
+  const nuevaIntencionAgenda = () => {
+    contadorNavegacionAgenda.current += 1;
+    return contadorNavegacionAgenda.current;
+  };
+
   const abrirAgendaFiltrada = (tipo: string) => {
-    setNavegacionAgenda({ id: Date.now(), tipo });
+    setNavegacionAgenda({ id: nuevaIntencionAgenda(), tipo });
+    navegarA('agenda');
+  };
+
+  // Acceso directo de Inicio: entra a Agenda con el modal "Enviar calendario"
+  // ya abierto. No cambia el filtro ni duplica el modal: Agenda reutiliza su
+  // propio componente y su generador de texto para WhatsApp.
+  const abrirEnviarCalendario = () => {
+    setNavegacionAgenda({ id: nuevaIntencionAgenda(), abrirEnviarCalendario: true });
     navegarA('agenda');
   };
 
@@ -154,6 +170,7 @@ const AppShell: React.FC = () => {
                 setVistaActual={navegarA}
                 onIniciarAsistencia={irAPasarLista}
                 onAbrirAgendaFiltrada={abrirAgendaFiltrada}
+                onEnviarCalendario={abrirEnviarCalendario}
               />
             )}
 

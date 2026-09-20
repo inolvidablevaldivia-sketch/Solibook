@@ -159,6 +159,23 @@ const reclamarYSembrar = async <T>(
   }
 };
 
+// Marca colecciones como "ya sembradas". Se usa al retirar los datos de
+// demostración: deja el candado cerrado para que ningún equipo que conserve
+// copias locales antiguas las vuelva a subir a la nube.
+export const bloquearSiembraDe = async (colecciones: string[]): Promise<void> => {
+  if (colecciones.length === 0) return;
+  try {
+    const marca: Record<string, string> = {};
+    const ahora = new Date().toISOString();
+    colecciones.forEach(coleccion => {
+      marca[coleccion] = ahora;
+    });
+    await setDoc(doc(db, 'configuracion', 'semillas'), marca, { merge: true });
+  } catch (error) {
+    aviso('actualizar el candado de siembra', 'configuracion/semillas', error);
+  }
+};
+
 // Escucha una colección completa en tiempo real.
 // - alRecibir: se llama con la lista completa en cada cambio remoto o local.
 // - obtenerSemilla: datos a subir si la nube está vacía (migración inicial).

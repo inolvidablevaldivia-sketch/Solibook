@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import {
   Integrante,
   Evento,
@@ -15,15 +15,6 @@ import {
   DocumentoEvento
 } from '@/types';
 import {
-  INTEGRANTES_INICIALES,
-  EVENTOS_INICIALES,
-  ASISTENCIAS_INICIALES,
-  CARTAS_INICIALES,
-  ACTAS_INICIALES,
-  JUSTIFICACIONES_INICIALES,
-  NOTIFICACIONES_INICIALES
-} from '@/lib/initialData';
-import {
   COLECCIONES,
   DOC_CONFIG_GENERAL,
   suscribirseColeccion,
@@ -31,12 +22,14 @@ import {
   guardarDocumento,
   guardarDocumentos,
   eliminarDocumento as eliminarDocumentoFirestore,
-  eliminarDocumentos as eliminarDocumentosFirestore
+  eliminarDocumentos as eliminarDocumentosFirestore,
+  bloquearSiembraDe
 } from '@/lib/firestoreSync';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { obtenerProximoCumpleanos } from '@/lib/cumpleanos';
+import { ColeccionConDemo, filtrarDatosDemo, idsDemoDe } from '@/lib/datosDemo';
 
 interface AppContextType {
   // Integrantes
@@ -101,11 +94,16 @@ interface AppContextType {
   forzarActualizacionApp: () => void;
   usuarioActivo: { nombre: string; rol: string; iniciales: string };
   setUsuarioActivo: (u: { nombre: string; rol: string; iniciales: string }) => void;
+
+  // Mantenimiento: retire de la nube y del dispositivo los registros de
+  // demostración de las primeras versiones. Devuelve cuántos eliminó.
+  limpiarDatosDemo: () => Promise<number>;
+  cantidadDatosDemoEnUso: number;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const TIPOS_EVENTOS_BASE = [
+const TIPOS_EVENTOS_POR_DEFECTO = [
   'Ensayo',
   'Presentación',
   'Concierto',
@@ -246,7 +244,7 @@ const calcularMarcadoMasivo = (
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [integrantes, setIntegrantes] = useState<Integrante[]>([]);
-  const [tiposEventos, setTiposEventos] = useState<string[]>(TIPOS_EVENTOS_BASE);
+  const [tiposEventos, setTiposEventos] = useState<string[]>(TIPOS_EVENTOS_POR_DEFECTO);
   const [eventos, setEventos] = useState<Evento[]>([]);
   const [asistencias, setAsistencias] = useState<AsistenciaRegistro[]>([]);
   const [cartas, setCartas] = useState<Carta[]>([]);
@@ -261,6 +259,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // suscripciones a Firestore (las reglas pueden exigir usuario autenticado).
   const { usuario, modoLocal, puede } = useAuth();
   const claveSync = modoLocal ? 'modo-local' : (usuario?.uid ?? 'sin-sesion');
+  // Solo los roles de gestión publican cambios en la configuración compartida
+  // (tipos de actividad). Se guarda como dato estable para no reabrir las
+  // suscripciones en cada render.
+  const puedeConfigurarEventos = puede('crear_evento');
 
   const [usuarioActivo, setUsuarioActivo] = useState({
     nombre: 'Pastoral & Secretaría General',
@@ -271,7 +273,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Espejos síncronos del estado para leer el valor más reciente dentro de
   // las mutaciones (y calcular qué documentos escribir en Firestore).
   const integrantesRef = useRef<Integrante[]>([]);
-  const tiposEventosRef = useRef<string[]>(TIPOS_EVENTOS_BASE);
+  const tiposEventosRef = useRef<string[]>(TIPOS_EVENTOS_POR_DEFECTO);
   const eventosRef = useRef<Evento[]>([]);
   const asistenciasRef = useRef<AsistenciaRegistro[]>([]);
   const cartasRef = useRef<Carta[]>([]);
@@ -294,49 +296,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     documentosEventoRef.current = documentosEvento;
   });
 
-  // Carga inicial persistente de LocalStorage (respaldo y modo sin conexión)
+  // Carga inicial desde LocalStorage (respaldo y modo sin conexión).
+  // Solibook arranca sin datos: no hay integrantes, actividades ni documentos
+  // de demostración. Lo único que se recupera es lo que ya estaba guardado en
+  // este dispositivo, depurado de los registros de ejemplo antiguos.
   useEffect(() => {
-    try {
-      const storedInt = localStorage.getItem('solibook_integrantes');
-      const storedEv = localStorage.getItem('solibook_eventos');
-      const storedTipos = localStorage.getItem('solibook_tipos_eventos');
-      const storedAs = localStorage.getItem('solibook_asistencias');
-      const storedCar = localStorage.getItem('solibook_cartas');
-      const storedAct = localStorage.getItem('solibook_actas');
-      const storedJust = localStorage.getItem('solibook_justificaciones');
-      const storedNot = localStorage.getItem('solibook_notificaciones');
-      const storedDocs = localStorage.getItem('solibook_documentos');
-      const storedDocsEvento = localStorage.getItem('solibook_documentos_evento');
+    const leer = <T,>(clave: string): T[] => {
+      try {
+        const bruto = localStorage.getItem(clave);
+        if (!bruto) return [];
+        const parseado: unknown = JSON.parse(bruto);
+        return Array.isArray(parseado) ? (parseado as T[]) : [];
+      } catch {
+        return [];
+      }
+    };
 
-      const dataIntegrantes: Integrante[] = storedInt ? JSON.parse(storedInt) : INTEGRANTES_INICIALES;
-      const dataEventos: Evento[] = storedEv ? JSON.parse(storedEv) : EVENTOS_INICIALES;
-      const dataTipos: string[] = storedTipos ? JSON.parse(storedTipos) : TIPOS_EVENTOS_BASE;
-      // Siempre ordenar alfabéticamente por defecto
-      dataIntegrantes.sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
+    const dataIntegrantes = leer<Integrante>('solibook_integrantes');
+    const dataEventos = leer<Evento>('solibook_eventos');
+    const dataTipos = leer<string>('solibook_tipos_eventos');
+    const dataAsistencias = leer<AsistenciaRegistro>('solibook_asistencias');
 
-      setIntegrantes(dataIntegrantes);
-      setEventos(dataEventos);
-      setTiposEventos(tiposUnicos([...TIPOS_EVENTOS_BASE, ...dataTipos, ...dataEventos.map(e => e.tipo)]));
-      setAsistencias(storedAs ? JSON.parse(storedAs) : ASISTENCIAS_INICIALES);
-      setCartas(storedCar ? JSON.parse(storedCar) : CARTAS_INICIALES);
-      setActas(storedAct ? JSON.parse(storedAct) : ACTAS_INICIALES);
-      setJustificaciones(storedJust ? JSON.parse(storedJust) : JUSTIFICACIONES_INICIALES);
-      setNotificaciones(storedNot ? JSON.parse(storedNot) : NOTIFICACIONES_INICIALES);
-      setDocumentos(storedDocs ? JSON.parse(storedDocs) : []);
-      setDocumentosEvento(storedDocsEvento ? JSON.parse(storedDocsEvento) : []);
-    } catch {
-      const base = [...INTEGRANTES_INICIALES].sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
-      setIntegrantes(base);
-      setEventos(EVENTOS_INICIALES);
-      setTiposEventos(tiposUnicos([...TIPOS_EVENTOS_BASE, ...EVENTOS_INICIALES.map(e => e.tipo)]));
-      setAsistencias(ASISTENCIAS_INICIALES);
-      setCartas(CARTAS_INICIALES);
-      setActas(ACTAS_INICIALES);
-      setJustificaciones(JUSTIFICACIONES_INICIALES);
-      setNotificaciones(NOTIFICACIONES_INICIALES);
-      setDocumentos([]);
-      setDocumentosEvento([]);
-    }
+    setIntegrantes(
+      ordenarIntegrantes(filtrarDatosDemo('integrantes', dataIntegrantes))
+    );
+    setEventos(filtrarDatosDemo('eventos', dataEventos));
+    setTiposEventos(
+      tiposUnicos([
+        ...TIPOS_EVENTOS_POR_DEFECTO,
+        ...dataTipos,
+        ...dataEventos.map(e => e.tipo)
+      ])
+    );
+    setAsistencias(filtrarDatosDemo('asistencias', dataAsistencias));
+    setCartas(filtrarDatosDemo('cartas', leer<Carta>('solibook_cartas')));
+    setActas(filtrarDatosDemo('actas', leer<Acta>('solibook_actas')));
+    setJustificaciones(
+      filtrarDatosDemo('justificaciones', leer<Justificacion>('solibook_justificaciones'))
+    );
+    setNotificaciones(
+      filtrarDatosDemo('notificaciones', leer<NotificacionItem>('solibook_notificaciones'))
+    );
+    setDocumentos(filtrarDatosDemo('documentos', leer<DocumentoInstitucional>('solibook_documentos')));
+    setDocumentosEvento(
+      filtrarDatosDemo('documentosEvento', leer<DocumentoEvento>('solibook_documentos_evento'))
+    );
     setIsLoaded(true);
   }, []);
 
@@ -362,8 +366,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       suscribirseColeccion<Integrante>(
         COLECCIONES.integrantes,
         items => setIntegrantes(ordenarIntegrantes(items)),
-        () =>
-          integrantesRef.current.length > 0 ? integrantesRef.current : INTEGRANTES_INICIALES,
+        () => integrantesRef.current,
         undefined,
         error => {
           if (error?.code !== 'permission-denied' || !sesionReal) return;
@@ -384,48 +387,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       suscribirseColeccion<Evento>(
         COLECCIONES.eventos,
         items => setEventos(items),
-        () => (eventosRef.current.length > 0 ? eventosRef.current : EVENTOS_INICIALES),
+        () => eventosRef.current,
         undefined,
         alSerRestringida(() => setEventos([]))
       ),
       suscribirseColeccion<AsistenciaRegistro>(
         COLECCIONES.asistencias,
         items => setAsistencias(items),
-        () => (asistenciasRef.current.length > 0 ? asistenciasRef.current : ASISTENCIAS_INICIALES),
+        () => asistenciasRef.current,
         undefined,
         alSerRestringida(() => setAsistencias([]))
       ),
       suscribirseColeccion<Carta>(
         COLECCIONES.cartas,
         items => setCartas(items),
-        () => (cartasRef.current.length > 0 ? cartasRef.current : CARTAS_INICIALES),
+        () => cartasRef.current,
         undefined,
         alSerRestringida(() => setCartas([]))
       ),
       suscribirseColeccion<Acta>(
         COLECCIONES.actas,
         items => setActas(items),
-        () => (actasRef.current.length > 0 ? actasRef.current : ACTAS_INICIALES),
+        () => actasRef.current,
         undefined,
         alSerRestringida(() => setActas([]))
       ),
       suscribirseColeccion<Justificacion>(
         COLECCIONES.justificaciones,
         items => setJustificaciones(items),
-        () =>
-          justificacionesRef.current.length > 0
-            ? justificacionesRef.current
-            : JUSTIFICACIONES_INICIALES,
+        () => justificacionesRef.current,
         undefined,
         alSerRestringida(() => setJustificaciones([]))
       ),
       suscribirseColeccion<NotificacionItem>(
         COLECCIONES.notificaciones,
         items => setNotificaciones(items),
-        () =>
-          notificacionesRef.current.length > 0
-            ? notificacionesRef.current
-            : NOTIFICACIONES_INICIALES,
+        () => notificacionesRef.current,
         undefined,
         alSerRestringida(() => setNotificaciones([]))
       ),
@@ -448,7 +445,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         DOC_CONFIG_GENERAL.id,
         datos => {
           if (datos?.tiposEventos) {
-            setTiposEventos(tiposUnicos([...TIPOS_EVENTOS_BASE, ...datos.tiposEventos]));
+            setTiposEventos(tiposUnicos([...TIPOS_EVENTOS_POR_DEFECTO, ...datos.tiposEventos]));
+            // Las categorías por defecto (Ensayo, Presentación, Concierto,
+            // Reunión, Administrativo, Otro) deben existir también en el
+            // documento compartido, aunque la configuración sea antigua.
+            const publicados = datos.tiposEventos;
+            const faltantes = TIPOS_EVENTOS_POR_DEFECTO.filter(tipo => !publicados.includes(tipo));
+            if (faltantes.length > 0 && puedeConfigurarEventos) {
+              void setDoc(
+                doc(db, DOC_CONFIG_GENERAL.coleccion, DOC_CONFIG_GENERAL.id),
+                { tiposEventos: tiposUnicos([...TIPOS_EVENTOS_POR_DEFECTO, ...publicados]) },
+                { merge: true }
+              ).catch(() => {
+                /* sin permiso o sin conexión: se mantiene la configuración local */
+              });
+            }
           } else if (datos === null) {
             // Documento aún inexistente: publicar la configuración local
             void setDoc(
@@ -470,7 +481,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Nota: el rol y el estado de la cuenta forman parte de las dependencias
     // porque al cambiar (p. ej. la fundadora recibe Director, o un Miembro es
     // promovido) las suscripciones deben reintentarse con los nuevos permisos.
-  }, [isLoaded, claveSync, modoLocal, usuario?.uid, usuario?.integranteId, usuario?.rol, usuario?.activo]);
+  }, [isLoaded, claveSync, modoLocal, usuario?.uid, usuario?.integranteId, usuario?.rol, usuario?.activo, puedeConfigurarEventos]);
 
   // Persistir en cada cambio (respaldo local y carga instantánea al abrir)
   useEffect(() => {
@@ -994,6 +1005,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Cuántos registros de la demostración siguen cargados en pantalla. Se usa
+  // para avisar en Usuarios y Permisos antes de limpiarlos.
+  const cantidadDatosDemoEnUso = useMemo(() => {
+    const listas: [ColeccionConDemo, { id: string }[]][] = [
+      ['integrantes', integrantes],
+      ['eventos', eventos],
+      ['asistencias', asistencias],
+      ['cartas', cartas],
+      ['actas', actas],
+      ['justificaciones', justificaciones],
+      ['notificaciones', notificaciones],
+      ['documentos', documentos],
+      ['documentosEvento', documentosEvento]
+    ];
+    return listas.reduce(
+      (total, [coleccion, items]) => total + (items.length - filtrarDatosDemo(coleccion, items).length),
+      0
+    );
+  }, [integrantes, eventos, asistencias, cartas, actas, justificaciones, notificaciones, documentos, documentosEvento]);
+
+  // Retira los registros de demostración que sincronizaron las primeras
+  // versiones de Solibook: se borran del dispositivo y de la nube. Solo se
+  // tocan los identificadores conocidos de la demo, por lo que el trabajo real
+  // del ministerio nunca se pierde. Devuelve cuántos documentos eliminó.
+  const limpiarDatosDemo = async (): Promise<number> => {
+    setIntegrantes(prev => filtrarDatosDemo('integrantes', prev));
+    setEventos(prev => filtrarDatosDemo('eventos', prev));
+    setAsistencias(prev => filtrarDatosDemo('asistencias', prev));
+    setCartas(prev => filtrarDatosDemo('cartas', prev));
+    setActas(prev => filtrarDatosDemo('actas', prev));
+    setJustificaciones(prev => filtrarDatosDemo('justificaciones', prev));
+    setNotificaciones(prev => filtrarDatosDemo('notificaciones', prev));
+    setDocumentos(prev => filtrarDatosDemo('documentos', prev));
+    setDocumentosEvento(prev => filtrarDatosDemo('documentosEvento', prev));
+
+    const porColeccion: [string, string[]][] = [
+      [COLECCIONES.integrantes, idsDemoDe('integrantes')],
+      [COLECCIONES.eventos, idsDemoDe('eventos')],
+      [COLECCIONES.asistencias, idsDemoDe('asistencias')],
+      [COLECCIONES.cartas, idsDemoDe('cartas')],
+      [COLECCIONES.actas, idsDemoDe('actas')],
+      [COLECCIONES.justificaciones, idsDemoDe('justificaciones')],
+      [COLECCIONES.notificaciones, idsDemoDe('notificaciones')],
+      [COLECCIONES.documentos, idsDemoDe('documentos')],
+      [COLECCIONES.documentosEvento, idsDemoDe('documentosEvento')]
+    ];
+
+    await Promise.all(
+      porColeccion
+        .filter(([, ids]) => ids.length > 0)
+        .map(([coleccion, ids]) => eliminarDocumentosFirestore(coleccion, ids))
+    );
+
+    // Se cierra el candado de siembra: ningún equipo con copias locales
+    // antiguas puede volver a subir la demostración.
+    await bloquearSiembraDe(Object.values(COLECCIONES));
+
+    return porColeccion.reduce((total, [, ids]) => total + ids.length, 0);
+  };
+
   // Botón Maestro de Recarga PWA
   const forzarActualizacionApp = () => {
     if (typeof window !== 'undefined') {
@@ -1055,7 +1126,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         eliminarDocumentoEvento,
         forzarActualizacionApp,
         usuarioActivo,
-        setUsuarioActivo
+        setUsuarioActivo,
+        limpiarDatosDemo,
+        cantidadDatosDemoEnUso
       }}
     >
       {children}

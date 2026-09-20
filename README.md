@@ -1,5 +1,24 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Solibook — puesta en marcha
+
+Solibook comienza **sin datos de demostración**: no hay integrantes, actividades, cartas ni
+actas de ejemplo. La primera persona que ingresa con Google reclama la cuenta fundadora y
+queda como **Director**; el resto de las cuentas entran como **Miembro** hasta que se les
+asigne un rol en *Usuarios y Permisos*.
+
+Las categorías de actividad por defecto son: *Ensayo, Presentación, Concierto, Reunión,
+Administrativo y Otro* (la persona con rol de gestión puede agregar más).
+
+Si algún dispositivo alcanzó a sincronizar la demostración de las primeras versiones,
+*Usuarios y Permisos → Mantenimiento → Eliminar datos de demostración* la retira de la nube
+y de ese dispositivo. Solo elimina los identificadores conocidos de la demo: el trabajo real
+del ministerio no se toca.
+
+La configuración de Firebase se toma de variables `NEXT_PUBLIC_FIREBASE_*` y, si no existen,
+usa los valores por defecto de `src/lib/firebase.ts`. Las reglas de seguridad viven en
+`firestore.rules` (Firebase Console → Firestore → Reglas).
+
 ## Getting Started
 
 First, run the development server:

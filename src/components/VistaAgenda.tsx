@@ -38,7 +38,10 @@ import {
 
 export interface NavegacionInicialAgenda {
   id: number;
-  tipo: string;
+  /** Tipo de actividad ya filtrado (Presentaciones, Concierto, …). */
+  tipo?: string;
+  /** Abre Agenda con el modal "Enviar calendario" listo para usar. */
+  abrirEnviarCalendario?: boolean;
 }
 
 interface VistaAgendaProps {
@@ -200,6 +203,11 @@ const PanelDocumentosEvento: React.FC<{ eventoId: string; visible: boolean }> = 
   );
 };
 
+// Intenciones de navegación que ya abrieron el modal de envío. Vive fuera del
+// componente para que, si la persona sale de Agenda y vuelve (por ejemplo con
+// la barra inferior), el modal no se reabra solo.
+const enviosCalendarioYaAbiertos = new Set<number>();
+
 export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, solicitarNuevoEvento, navegacionInicial }) => {
   const {
     eventos,
@@ -276,23 +284,38 @@ export const VistaAgenda: React.FC<VistaAgendaProps> = ({ onIniciarAsistencia, s
     }
   }, [solicitarNuevoEvento]);
 
-  // Accesos desde Inicio: abren el calendario con el tipo ya filtrado y en el
-  // mes de la próxima actividad relevante.
+  // Accesos desde Inicio:
+  // - Presentaciones / Conciertos: abren el calendario con el tipo filtrado y
+  //   en el mes de la próxima actividad relevante.
+  // - Enviar calendario: abren esta misma vista con el modal de envío listo,
+  //   reutilizando el componente y el generador de texto de Agenda.
   useEffect(() => {
     if (!navegacionInicial) return;
     // La intención de navegación viene desde Inicio y debe reflejarse una vez
     // que Agenda está montada.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setFiltroTipo(navegacionInicial.tipo);
-    setModoVista('calendario');
+    const tipo = navegacionInicial.tipo;
 
-    const ahora = Date.now();
-    const candidatos = eventos
-      .filter(evento => normalizarTipoEvento(evento.tipo) === normalizarTipoEvento(navegacionInicial.tipo))
-      .sort((a, b) => new Date(a.fechaHoraInicio).getTime() - new Date(b.fechaHoraInicio).getTime());
-    const destino = candidatos.find(evento => new Date(evento.fechaHoraInicio).getTime() >= ahora) || candidatos[0];
-    const fechaDestino = destino ? new Date(destino.fechaHoraInicio) : new Date();
-    setFechaActualNavegacion(new Date(fechaDestino.getFullYear(), fechaDestino.getMonth(), 1));
+    if (tipo) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFiltroTipo(tipo);
+      setModoVista('calendario');
+
+      const ahora = Date.now();
+      const candidatos = eventos
+        .filter(evento => normalizarTipoEvento(evento.tipo) === normalizarTipoEvento(tipo))
+        .sort((a, b) => new Date(a.fechaHoraInicio).getTime() - new Date(b.fechaHoraInicio).getTime());
+      const destino = candidatos.find(evento => new Date(evento.fechaHoraInicio).getTime() >= ahora) || candidatos[0];
+      const fechaDestino = destino ? new Date(destino.fechaHoraInicio) : new Date();
+      setFechaActualNavegacion(new Date(fechaDestino.getFullYear(), fechaDestino.getMonth(), 1));
+    }
+
+    if (
+      navegacionInicial.abrirEnviarCalendario &&
+      !enviosCalendarioYaAbiertos.has(navegacionInicial.id)
+    ) {
+      enviosCalendarioYaAbiertos.add(navegacionInicial.id);
+      setModalEnviarCalendario(true);
+    }
   }, [navegacionInicial, eventos]);
   const [copiadoToast, setCopiadoToast] = useState(false);
 

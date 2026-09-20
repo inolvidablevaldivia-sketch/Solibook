@@ -1,14 +1,14 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { RolUsuario } from '@/types';
 import { ROLES, DESCRIPCION_ROL, MATRIZ_PERMISOS, ETIQUETA_PERMISO } from '@/lib/permisos';
-import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut } from 'lucide-react';
+import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut, Eraser, Wrench } from 'lucide-react';
 
 export const VistaUsuarios: React.FC = () => {
-  const { integrantes } = useApp();
+  const { integrantes, limpiarDatosDemo, cantidadDatosDemoEnUso } = useApp();
   const {
     usuario,
     usuarios,
@@ -17,10 +17,32 @@ export const VistaUsuarios: React.FC = () => {
     vincularIntegrante,
     cerrarSesion,
     modoLocal,
+    puede,
     puedeAdministrarCuenta
   } = useAuth();
 
+  const [limpiandoDemo, setLimpiandoDemo] = useState(false);
+  const [mensajeDemo, setMensajeDemo] = useState('');
+
   const esUnoMismo = (uid: string) => usuario?.uid === uid;
+
+  // Retira de la nube y de este dispositivo los registros de ejemplo que
+  // sincronizaron las primeras versiones. Los datos reales no se tocan: solo
+  // se eliminan los identificadores conocidos de la demostración.
+  const ejecutarLimpiezaDemo = async () => {
+    const confirmado = window.confirm(
+      'Se eliminarán los integrantes, actividades, asistencias, cartas, actas, justificaciones y avisos de ejemplo de Solibook, tanto en la nube como en este dispositivo.\n\nLos datos reales del ministerio NO se tocan. ¿Continuar?'
+    );
+    if (!confirmado) return;
+    setLimpiandoDemo(true);
+    const eliminados = await limpiarDatosDemo();
+    setMensajeDemo(
+      eliminados > 0
+        ? `Listo: se retiraron ${eliminados} registros de demostración. La app queda limpia para comenzar a usarla.`
+        : 'No quedaban registros de demostración: la app ya está limpia.'
+    );
+    setLimpiandoDemo(false);
+  };
 
   return (
     <div className="space-y-3 max-w-3xl mx-auto pb-16">
@@ -225,6 +247,47 @@ export const VistaUsuarios: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Mantenimiento: la app ya no trae datos de ejemplo, pero los equipos
+          que sincronizaron la demostración antigua necesitan retirarla. */}
+      {puede('gestionar_usuarios') && (
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+          <div className="p-4 border-b border-slate-100">
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Wrench className="w-4 h-4 text-slate-500" />
+              Mantenimiento
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">Datos de demostración</p>
+          </div>
+          <div className="p-4 space-y-3">
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              Las primeras versiones de Solibook incluían integrantes, actividades, cartas y actas
+              de ejemplo. Si alcanzaron a sincronizarse, este botón los retira de la nube y de este
+              dispositivo. Los datos reales del ministerio no se tocan.
+            </p>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                onClick={ejecutarLimpiezaDemo}
+                disabled={limpiandoDemo}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl bg-[#8B1E2B] hover:bg-[#721823] disabled:bg-slate-300 text-white transition-colors"
+              >
+                <Eraser className="w-3.5 h-3.5" />
+                {limpiandoDemo ? 'Eliminando…' : 'Eliminar datos de demostración'}
+              </button>
+              {cantidadDatosDemoEnUso > 0 && (
+                <span className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg">
+                  {cantidadDatosDemoEnUso} en pantalla
+                </span>
+              )}
+            </div>
+            {mensajeDemo && (
+              <p className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                {mensajeDemo}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
