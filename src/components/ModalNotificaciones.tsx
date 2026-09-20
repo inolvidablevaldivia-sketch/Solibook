@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import {
   Bell,
   X,
@@ -31,6 +32,7 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
     marcarCartaLeida,
     usuarioActivo
   } = useApp();
+  const { puede } = useAuth();
 
   const [filtro, setFiltro] = useState<'Todos' | 'Justificaciones' | 'Cartas' | 'Actas'>('Todos');
 
@@ -109,22 +111,24 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
                       <span className="text-slate-500">
                         Visto por: {j.vistoPor.length > 0 ? j.vistoPor.join(', ') : 'Nadie aún'}
                       </span>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => resolverJustificacion(j.id, 'Aprobado')}
-                          className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors"
-                        >
-                          <CheckCircle className="w-3 h-3" />
-                          Aprobar
-                        </button>
-                        <button
-                          onClick={() => resolverJustificacion(j.id, 'Rechazado')}
-                          className="flex items-center gap-1 px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium transition-colors"
-                        >
-                          <XCircle className="w-3 h-3" />
-                          Rechazar
-                        </button>
-                      </div>
+                      {puede('resolver_justificaciones') && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => resolverJustificacion(j.id, 'Aprobado')}
+                            className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors"
+                          >
+                            <CheckCircle className="w-3 h-3" />
+                            Aprobar
+                          </button>
+                          <button
+                            onClick={() => resolverJustificacion(j.id, 'Rechazado')}
+                            className="flex items-center gap-1 px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium transition-colors"
+                          >
+                            <XCircle className="w-3 h-3" />
+                            Rechazar
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -160,7 +164,7 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
                           Visto por: {c.vistoPor.length > 0 ? c.vistoPor.join(', ') : 'Sin lecturas'}
                         </span>
                         <div className="flex items-center gap-1">
-                          {!yaVisto && (
+                          {!yaVisto && puede('acuse_recibo') && (
                             <button
                               onClick={() => marcarCartaLeida(c.id, usuarioActivo.iniciales)}
                               className="flex items-center gap-1 px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-medium transition-colors"

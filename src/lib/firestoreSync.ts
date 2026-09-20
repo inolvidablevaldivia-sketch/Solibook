@@ -163,11 +163,13 @@ const reclamarYSembrar = async <T>(
 // - obtenerSemilla: datos a subir si la nube está vacía (migración inicial).
 //   Devolver [] para colecciones que no se siembran.
 // - obtenerId: cómo extraer el id de cada documento al sembrar (uid en usuarios).
+// - alFallar: reacción ante un error del oyente (p. ej. permiso denegado por rol).
 export const suscribirseColeccion = <T extends object>(
   coleccion: string,
   alRecibir: (items: T[]) => void,
   obtenerSemilla: () => T[],
-  obtenerId: (item: T) => string = idPorDefecto
+  obtenerId: (item: T) => string = idPorDefecto,
+  alFallar?: (error: { code?: string }) => void
 ): Unsubscribe => {
   return onSnapshot(
     collection(db, coleccion),
@@ -183,7 +185,10 @@ export const suscribirseColeccion = <T extends object>(
       }
       alRecibir(items);
     },
-    error => aviso('escuchar', coleccion, error)
+    error => {
+      aviso('escuchar', coleccion, error);
+      alFallar?.(error);
+    }
   );
 };
 

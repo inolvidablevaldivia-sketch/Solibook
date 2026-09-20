@@ -9,8 +9,16 @@ import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut } from 'lucide
 
 export const VistaUsuarios: React.FC = () => {
   const { integrantes } = useApp();
-  const { usuario, usuarios, cambiarRol, activarUsuario, vincularIntegrante, cerrarSesion, modoLocal } =
-    useAuth();
+  const {
+    usuario,
+    usuarios,
+    cambiarRol,
+    activarUsuario,
+    vincularIntegrante,
+    cerrarSesion,
+    modoLocal,
+    puedeAdministrarCuenta
+  } = useAuth();
 
   const esUnoMismo = (uid: string) => usuario?.uid === uid;
 
@@ -97,7 +105,7 @@ export const VistaUsuarios: React.FC = () => {
                   </label>
                   <select
                     value={u.rol}
-                    disabled={propio}
+                    disabled={propio || !puedeAdministrarCuenta(u.uid)}
                     onChange={e => cambiarRol(u.uid, e.target.value as RolUsuario)}
                     className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-xl bg-white focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
                   >
@@ -115,8 +123,9 @@ export const VistaUsuarios: React.FC = () => {
                   </label>
                   <select
                     value={u.integranteId || ''}
+                    disabled={!puedeAdministrarCuenta(u.uid)}
                     onChange={e => vincularIntegrante(u.uid, e.target.value || undefined)}
-                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-xl bg-white focus:outline-none"
+                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-xl bg-white focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
                   >
                     <option value="">Sin vincular</option>
                     {integrantes
@@ -136,11 +145,17 @@ export const VistaUsuarios: React.FC = () => {
                   {DESCRIPCION_ROL[u.rol]}
                 </p>
                 <button
-                  disabled={propio}
+                  disabled={propio || !puedeAdministrarCuenta(u.uid)}
                   onClick={() => activarUsuario(u.uid, !u.activo)}
-                  title={propio ? 'No puedes suspender tu propia cuenta' : undefined}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-bold rounded-lg border transition-colors shrink-0 ${
+                  title={
                     propio
+                      ? 'No puedes suspender tu propia cuenta'
+                      : !puedeAdministrarCuenta(u.uid)
+                        ? 'Solo el Desarrollador administra cuentas de nivel Director o Desarrollador'
+                        : undefined
+                  }
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-bold rounded-lg border transition-colors shrink-0 ${
+                    propio || !puedeAdministrarCuenta(u.uid)
                       ? 'text-slate-300 border-slate-200 cursor-not-allowed'
                       : u.activo
                         ? 'text-[#8B1E2B] border-rose-200 hover:bg-rose-50'

@@ -32,26 +32,51 @@ que la directiva y los miembros ven la misma información en todos sus dispositi
 - **Modo local:** "Continuar sin conexión" sigue disponible; en ese modo la app
   usa solo `localStorage`, igual que antes de la sincronización.
 
-## Reglas de seguridad recomendadas
+## Reglas de seguridad (modelo de roles)
 
-Si todavía no tienes reglas publicadas, este es el punto de partida seguro
-(Firebase Console → Firestore Database → Reglas):
+Las reglas endurecidas viven en [`firestore.rules`](../firestore.rules) en la
+raíz del repositorio. Se publican en Firebase Console → Firestore Database →
+Reglas, o con `firebase deploy --only firestore:rules`.
 
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // Solo usuarios con sesión de Google pueden leer o modificar datos
-    match /{document=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
-```
+La seguridad real la hacen cumplir los servidores de Firebase, no el navegador:
+aunque alguien modifique el código en su equipo, no podrá leer ni escribir nada
+que su rol no permita.
 
-Si hoy usas las reglas de prueba (`allow read, write: if true;`), funcionarán
-igual, pero recuerda endurecerlas antes de publicar la app: con ellas cualquier
-persona con la URL del proyecto puede leer o borrar la base de datos.
+### Matriz de roles
+
+| Permiso \ Rol | Director | Desarrollador | Secretario | Tesorero | Directiva | Miembro |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: |
+| Ver calendario y su citación | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Operación diaria (eventos, asistencia, cartas, actas, documentos) | ✅ | ✅ | ✅ | ✅ | ✅ | ⛔ |
+| Acuse de recibo (vistoPor) | ✅ | ✅ | ✅ | ✅ | ⛔ | ⛔ |
+| Eliminar documentos | ✅ | ✅ | ✅ | ✅ | ⛔ | ⛔ |
+| Agregar / eliminar miembros | ✅ | ✅ | ✅ | ⛔ | ⛔ | ⛔ |
+| Aprobar / rechazar justificaciones | ✅ | ✅ | ✅ | ⛔ | ⛔ | ⛔ |
+| Administrar usuarios y roles | ✅ *(1)* | ✅ | ⛔ | ⛔ | ⛔ | ⛔ |
+| Modificar cuentas Director / Desarrollador | ⛔ | ✅ | ⛔ | ⛔ | ⛔ | ⛔ |
+
+*(1)* El Director administra usuarios pero no puede nombrar roles Director ni
+Desarrollador.
+
+### Detalles clave de las reglas
+
+- **Cuenta fundadora:** la primera persona que inicia sesión reclama el rol
+  Director mediante una transacción atómica en `configuracion/estado`. Todo el
+  resto entra como Miembro hasta que la directiva le asigne rol.
+- **`get` vs `list` en integrantes:** el rol Miembro no puede listar el
+  directorio, pero sí puede leer **su propia ficha** (`perfil().integranteId`)
+  para saber su cuerda y si está citado.
+- **Transiciones protegidas:** en `justificaciones`, cualquier rol de gestión
+  puede registrar una (nace como `Pendiente`), pero solo Director, Secretario y
+  Desarrollador pueden cambiar su resolución; el sello `vistoPor` exige además
+  el rol con acuse de recibo.
+- **Migración de roles antiguos:** los valores `Administrador` y `Secretaria`
+  guardados antes del cambio se tratan como `Director` y `Secretario`, y las
+  cuentas se reescriben solas con el valor nuevo al iniciar sesión.
+- **Candado final:** toda colección no declarada queda denegada
+  (`if false`), evitando fugas por colecciones futuras mal configuradas.
+- **Tope de imagen:** la foto de perfil en Base64 se limita a ~950 KB para no
+  chocar con el límite de 1 MB por documento de Firestore.
 
 > Las imágenes y adjuntos se guardan como Base64 comprimido (~30–60 KB) dentro
 > de los propios documentos, muy por debajo del límite de 1 MB por documento,
@@ -65,9 +90,14 @@ persona con la URL del proyecto puede leer o borrar la base de datos.
    vista previa). Sin este paso, el botón "Ingresar con Google" fallará con
    `auth/unauthorized-domain` en ese dominio.
 3. **Firestore Database:** crea la base de datos (modo nativo) y publica las
-   reglas recomendadas de arriba.
-4. Abre la app, inicia sesión con Google: la primera cuenta registrada queda
-   como **Administrador** y tus datos locales se migran solos a la nube.
+   reglas de `firestore.rules`.
+4. Publica las reglas y la versión nueva de la app **juntas** (mismo momento),
+   para que las cuentas no escriban roles que las reglas aún no conocen.
+5. Abre la app e inicia sesión con Google **primero tú**: tu cuenta reclama el
+   rol de Director fundador y los datos locales se migran solos a la nube. Los
+   demás usuarios entrarán como Miembro hasta que les asignes su rol en
+   **Usuarios y Permisos** (quienes ya tenían rol guardado lo conservan por la
+   migración automática).
 
 A partir de ahí, cualquier otro usuario que ingrese con Google verá los mismos
 miembros, agenda, asistencias, cartas, actas, documentos y usuarios; y los

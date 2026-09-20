@@ -10,7 +10,8 @@ export type Permiso =
   | 'eliminar_evento'
   | 'pasar_lista'
   | 'finalizar_lista'
-  | 'gestionar_justificaciones'
+  | 'gestionar_justificaciones' // registrar/corregir justificaciones
+  | 'resolver_justificaciones' // aprobar o rechazar
   | 'ver_miembros'
   | 'crear_miembro'
   | 'editar_miembro'
@@ -20,7 +21,9 @@ export type Permiso =
   | 'ver_actas'
   | 'gestionar_actas'
   | 'ver_documentos'
-  | 'gestionar_documentos'
+  | 'gestionar_documentos' // crear y editar documentos institucionales
+  | 'eliminar_documento'
+  | 'acuse_recibo' // marcar "visto por" en cartas y justificaciones
   | 'ver_metricas'
   | 'exportar_datos'
   | 'gestionar_usuarios';
@@ -33,6 +36,7 @@ export const PERMISOS: Permiso[] = [
   'pasar_lista',
   'finalizar_lista',
   'gestionar_justificaciones',
+  'resolver_justificaciones',
   'ver_miembros',
   'crear_miembro',
   'editar_miembro',
@@ -43,42 +47,82 @@ export const PERMISOS: Permiso[] = [
   'gestionar_actas',
   'ver_documentos',
   'gestionar_documentos',
+  'eliminar_documento',
+  'acuse_recibo',
   'ver_metricas',
   'exportar_datos',
   'gestionar_usuarios'
 ];
 
-export const ROLES: RolUsuario[] = ['Administrador', 'Directiva', 'Secretaria', 'Miembro'];
+export const ROLES: RolUsuario[] = [
+  'Director',
+  'Secretario',
+  'Tesorero',
+  'Directiva',
+  'Miembro',
+  'Desarrollador'
+];
+
+// Roles con poder sobre cuentas: solo el Desarrollador puede crear, modificar
+// o suspender cuentas con estos roles (el Director administra al resto).
+export const ROLES_SUPERIORES: RolUsuario[] = ['Director', 'Desarrollador'];
 
 export const DESCRIPCION_ROL: Record<RolUsuario, string> = {
-  Administrador: 'Acceso total al sistema, incluida la gestión de usuarios y permisos.',
-  Directiva: 'Gestión completa de la operación, sin eliminar miembros ni administrar usuarios.',
-  Secretaria: 'Gestión administrativa y de registros, sin eliminar miembros, eventos ni administrar usuarios.',
-  Miembro: 'Acceso de solo lectura a la agenda, el listado de miembros, las actas y los documentos.'
+  Director:
+    'Acceso total a la operación y administración de usuarios, excepto modificar cuentas de nivel Director o Desarrollador.',
+  Secretario: 'Gestión completa de la operación y registros, sin administrar usuarios ni roles.',
+  Tesorero:
+    'Gestión completa de la operación, sin administrar roles, sin agregar ni eliminar miembros y sin aprobar justificaciones.',
+  Directiva:
+    'Gestión de la operación, sin administrar roles, sin agregar ni eliminar miembros, sin aprobar justificaciones, sin dar acuse de recibo y sin eliminar documentos.',
+  Miembro:
+    'Solo lectura del calendario: ve las próximas actividades y si está citado. El resto de la información está restringida.',
+  Desarrollador:
+    'Soporte técnico con acceso absoluto, incluida la administración de cuentas de cualquier nivel.'
 };
 
-// Permisos que definen la base de cada rol, expresados por diferencia respecto
-// del rol inmediatamente superior para mantener la matriz legible.
-const SIN_ELIMINAR_MIEMBRO_NI_USUARIOS: Permiso[] = PERMISOS.filter(
-  p => p !== 'eliminar_miembro' && p !== 'gestionar_usuarios'
+// Permisos por diferencia respecto al acceso total, para mantener la matriz
+// alineada con la definición acordada de cada rol.
+const SIN_ADMINISTRAR_ROLES: Permiso[] = PERMISOS.filter(p => p !== 'gestionar_usuarios');
+
+const TESORERO: Permiso[] = SIN_ADMINISTRAR_ROLES.filter(
+  p =>
+    p !== 'crear_miembro' &&
+    p !== 'eliminar_miembro' &&
+    p !== 'resolver_justificaciones'
 );
 
-const SECRETARIA: Permiso[] = SIN_ELIMINAR_MIEMBRO_NI_USUARIOS.filter(
-  p => p !== 'eliminar_evento'
+const DIRECTIVA: Permiso[] = TESORERO.filter(
+  p => p !== 'acuse_recibo' && p !== 'eliminar_documento'
 );
 
-const MIEMBRO: Permiso[] = ['ver_agenda', 'ver_miembros', 'ver_actas', 'ver_documentos'];
+const MIEMBRO: Permiso[] = ['ver_agenda'];
 
 export const MATRIZ_PERMISOS: Record<RolUsuario, Permiso[]> = {
-  Administrador: [...PERMISOS],
-  Directiva: SIN_ELIMINAR_MIEMBRO_NI_USUARIOS,
-  Secretaria: SECRETARIA,
+  Director: [...PERMISOS],
+  Desarrollador: [...PERMISOS],
+  Secretario: SIN_ADMINISTRAR_ROLES,
+  Tesorero: TESORERO,
+  Directiva: DIRECTIVA,
   Miembro: MIEMBRO
 };
 
-export const tienePermiso = (rol: RolUsuario | undefined, permiso: Permiso): boolean => {
+// Migración de roles antiguos guardados antes del nuevo modelo.
+const ROLES_LEGADOS: Record<string, RolUsuario> = {
+  Administrador: 'Director',
+  Secretaria: 'Secretario'
+};
+
+// Convierte cualquier valor guardado (nuevo o antiguo) al rol vigente.
+export const normalizarRol = (rol: string | undefined): RolUsuario => {
+  if (!rol) return 'Miembro';
+  if (rol in ROLES_LEGADOS) return ROLES_LEGADOS[rol];
+  return (ROLES as string[]).includes(rol) ? (rol as RolUsuario) : 'Miembro';
+};
+
+export const tienePermiso = (rol: RolUsuario | string | undefined, permiso: Permiso): boolean => {
   if (!rol) return false;
-  return MATRIZ_PERMISOS[rol]?.includes(permiso) ?? false;
+  return MATRIZ_PERMISOS[normalizarRol(rol)]?.includes(permiso) ?? false;
 };
 
 export const ETIQUETA_PERMISO: Record<Permiso, string> = {
@@ -88,7 +132,8 @@ export const ETIQUETA_PERMISO: Record<Permiso, string> = {
   eliminar_evento: 'Eliminar evento',
   pasar_lista: 'Pasar lista',
   finalizar_lista: 'Finalizar lista',
-  gestionar_justificaciones: 'Gestionar justificaciones',
+  gestionar_justificaciones: 'Registrar justificaciones',
+  resolver_justificaciones: 'Aprobar o rechazar justificaciones',
   ver_miembros: 'Ver miembros',
   crear_miembro: 'Crear miembro',
   editar_miembro: 'Editar miembro',
@@ -99,6 +144,8 @@ export const ETIQUETA_PERMISO: Record<Permiso, string> = {
   gestionar_actas: 'Gestionar actas',
   ver_documentos: 'Ver documentos',
   gestionar_documentos: 'Gestionar documentos',
+  eliminar_documento: 'Eliminar documentos',
+  acuse_recibo: 'Dar acuse de recibo (visto)',
   ver_metricas: 'Ver métricas',
   exportar_datos: 'Exportar datos',
   gestionar_usuarios: 'Gestionar usuarios'

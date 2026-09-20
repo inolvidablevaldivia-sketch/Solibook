@@ -334,32 +334,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!isLoaded) return;
 
+    // Con sesión real, un "permiso denegado" significa que el rol no tiene
+    // acceso a esa colección: se muestra vacía en lugar del contenido local
+    // de demostración. En modo local (sin Firebase) se conserva todo.
+    const sesionReal = !modoLocal && !!usuario?.uid;
+    const alSerRestringida = (vaciar: () => void) => {
+      return (error: { code?: string }) => {
+        if (error?.code === 'permission-denied' && sesionReal) vaciar();
+      };
+    };
+
+    let suscripcionFichaPropia: (() => void) | undefined;
+
     const desuscribir = [
       suscribirseColeccion<Integrante>(
         COLECCIONES.integrantes,
         items => setIntegrantes(ordenarIntegrantes(items)),
         () =>
-          integrantesRef.current.length > 0 ? integrantesRef.current : INTEGRANTES_INICIALES
+          integrantesRef.current.length > 0 ? integrantesRef.current : INTEGRANTES_INICIALES,
+        undefined,
+        error => {
+          if (error?.code !== 'permission-denied' || !sesionReal) return;
+          // Rol sin acceso al directorio (p. ej. Miembro): solo se escucha la
+          // ficha vinculada a la cuenta, para saber su cuerda y si está citado.
+          if (usuario?.integranteId) {
+            suscripcionFichaPropia?.();
+            suscripcionFichaPropia = suscribirseDocumento<Integrante>(
+              COLECCIONES.integrantes,
+              usuario.integranteId,
+              ficha => setIntegrantes(ficha ? [ficha] : [])
+            );
+          } else {
+            setIntegrantes([]);
+          }
+        }
       ),
       suscribirseColeccion<Evento>(
         COLECCIONES.eventos,
         items => setEventos(items),
-        () => (eventosRef.current.length > 0 ? eventosRef.current : EVENTOS_INICIALES)
+        () => (eventosRef.current.length > 0 ? eventosRef.current : EVENTOS_INICIALES),
+        undefined,
+        alSerRestringida(() => setEventos([]))
       ),
       suscribirseColeccion<AsistenciaRegistro>(
         COLECCIONES.asistencias,
         items => setAsistencias(items),
-        () => (asistenciasRef.current.length > 0 ? asistenciasRef.current : ASISTENCIAS_INICIALES)
+        () => (asistenciasRef.current.length > 0 ? asistenciasRef.current : ASISTENCIAS_INICIALES),
+        undefined,
+        alSerRestringida(() => setAsistencias([]))
       ),
       suscribirseColeccion<Carta>(
         COLECCIONES.cartas,
         items => setCartas(items),
-        () => (cartasRef.current.length > 0 ? cartasRef.current : CARTAS_INICIALES)
+        () => (cartasRef.current.length > 0 ? cartasRef.current : CARTAS_INICIALES),
+        undefined,
+        alSerRestringida(() => setCartas([]))
       ),
       suscribirseColeccion<Acta>(
         COLECCIONES.actas,
         items => setActas(items),
-        () => (actasRef.current.length > 0 ? actasRef.current : ACTAS_INICIALES)
+        () => (actasRef.current.length > 0 ? actasRef.current : ACTAS_INICIALES),
+        undefined,
+        alSerRestringida(() => setActas([]))
       ),
       suscribirseColeccion<Justificacion>(
         COLECCIONES.justificaciones,
@@ -367,7 +403,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         () =>
           justificacionesRef.current.length > 0
             ? justificacionesRef.current
-            : JUSTIFICACIONES_INICIALES
+            : JUSTIFICACIONES_INICIALES,
+        undefined,
+        alSerRestringida(() => setJustificaciones([]))
       ),
       suscribirseColeccion<NotificacionItem>(
         COLECCIONES.notificaciones,
@@ -375,12 +413,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         () =>
           notificacionesRef.current.length > 0
             ? notificacionesRef.current
-            : NOTIFICACIONES_INICIALES
+            : NOTIFICACIONES_INICIALES,
+        undefined,
+        alSerRestringida(() => setNotificaciones([]))
       ),
       suscribirseColeccion<DocumentoInstitucional>(
         COLECCIONES.documentos,
         items => setDocumentos(items),
-        () => documentosRef.current
+        () => documentosRef.current,
+        undefined,
+        alSerRestringida(() => setDocumentos([]))
       ),
       suscribirseDocumento<{ tiposEventos?: string[] }>(
         DOC_CONFIG_GENERAL.coleccion,
@@ -402,8 +444,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       )
     ];
 
-    return () => desuscribir.forEach(cancelar => cancelar());
-  }, [isLoaded, claveSync]);
+    return () => {
+      suscripcionFichaPropia?.();
+      desuscribir.forEach(cancelar => cancelar());
+    };
+    // Nota: el rol y el estado de la cuenta forman parte de las dependencias
+    // porque al cambiar (p. ej. la fundadora recibe Director, o un Miembro es
+    // promovido) las suscripciones deben reintentarse con los nuevos permisos.
+  }, [isLoaded, claveSync, modoLocal, usuario?.uid, usuario?.integranteId, usuario?.rol, usuario?.activo]);
 
   // Persistir en cada cambio (respaldo local y carga instantánea al abrir)
   useEffect(() => {

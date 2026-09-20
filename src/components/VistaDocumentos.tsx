@@ -153,7 +153,7 @@ export const VistaDocumentos: React.FC = () => {
                   </span>
                 </a>
 
-                {puede('gestionar_documentos') && (
+                {puede('eliminar_documento') && (
                 <button
                   onClick={() => confirmarEliminar(doc)}
                   title="Eliminar documento"

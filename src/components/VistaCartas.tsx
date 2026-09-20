@@ -224,7 +224,7 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
                 </div>
 
                 <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                  {!yaLeido && (
+                  {!yaLeido && puede('acuse_recibo') && (
                     <button
                       onClick={() => marcarCartaLeida(carta.id, usuarioActivo.iniciales)}
                       className="flex items-center gap-1 text-[11px] text-[#0099DD] font-semibold hover:underline"

@@ -831,24 +831,28 @@ const ModalPasoLista: React.FC<{ evento: Evento; onCerrar: () => void }> = ({ ev
             </div>
 
             <div className="flex justify-end gap-2">
-              <button
-                onClick={() => {
-                  resolverJustificacion(justificacionAbierta.id, 'Rechazado');
-                  setJustificacionAbiertaId(null);
-                }}
-                className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-50 text-[#8B1E2B] border border-rose-200 hover:bg-rose-100"
-              >
-                Rechazar
-              </button>
-              <button
-                onClick={() => {
-                  resolverJustificacion(justificacionAbierta.id, 'Aprobado');
-                  setJustificacionAbiertaId(null);
-                }}
-                className="px-4 py-2 text-xs font-bold rounded-xl bg-[#0099DD] hover:bg-[#0088cc] text-white"
-              >
-                Aprobar
-              </button>
+              {puede('resolver_justificaciones') && (
+                <>
+                  <button
+                    onClick={() => {
+                      resolverJustificacion(justificacionAbierta.id, 'Rechazado');
+                      setJustificacionAbiertaId(null);
+                    }}
+                    className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-50 text-[#8B1E2B] border border-rose-200 hover:bg-rose-100"
+                  >
+                    Rechazar
+                  </button>
+                  <button
+                    onClick={() => {
+                      resolverJustificacion(justificacionAbierta.id, 'Aprobado');
+                      setJustificacionAbiertaId(null);
+                    }}
+                    className="px-4 py-2 text-xs font-bold rounded-xl bg-[#0099DD] hover:bg-[#0088cc] text-white"
+                  >
+                    Aprobar
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
