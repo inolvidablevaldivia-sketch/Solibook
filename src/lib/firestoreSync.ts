@@ -35,6 +35,7 @@ export const COLECCIONES = {
   justificaciones: 'justificaciones',
   notificaciones: 'notificaciones',
   documentos: 'documentos',
+  documentosEvento: 'documentos_evento',
   usuarios: 'usuarios'
 } as const;
 

@@ -48,6 +48,17 @@ export interface DocumentoInstitucional {
   fechaCarga: string;
 }
 
+// Documentos asociados a una actividad. Viven en una colección independiente
+// de los eventos para que el rol Miembro no pueda leer enlaces administrativos
+// sensibles aunque sí tenga acceso al calendario.
+export interface DocumentoEvento {
+  id: string;
+  eventoId: string;
+  titulo: string;
+  enlaceUrl: string;
+  fechaCarga: string;
+}
+
 export interface Integrante {
   id: string;
   nombreCompleto: string;

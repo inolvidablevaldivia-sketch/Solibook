@@ -166,6 +166,134 @@ const FilaMiembro: React.FC<FilaMiembroProps> = ({
   );
 };
 
+const TablaMiembros: React.FC<{
+  integrantes: Integrante[];
+  eventos: ReturnType<typeof useApp>['eventos'];
+  asistencias: ReturnType<typeof useApp>['asistencias'];
+  puedeEditar: boolean;
+  puedeEliminar: boolean;
+  onAbrirFicha: (integrante: Integrante) => void;
+  onEditar: (integrante: Integrante) => void;
+  onMarcarInactivo: (integrante: Integrante) => void;
+  onEliminar: (integrante: Integrante) => void;
+}> = ({
+  integrantes,
+  eventos,
+  asistencias,
+  puedeEditar,
+  puedeEliminar,
+  onAbrirFicha,
+  onEditar,
+  onMarcarInactivo,
+  onEliminar
+}) => {
+  const fechaCorta = (fecha?: string) =>
+    fecha
+      ? new Date(`${fecha}T12:00:00`).toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' })
+      : '—';
+
+  return (
+    <div className="hidden lg:block bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+      <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <span className="text-xs font-bold text-slate-700">Directorio en tabla</span>
+        <span className="text-[11px] text-slate-500">Selecciona una fila para abrir la ficha completa</span>
+      </div>
+      <div className="overflow-x-auto max-h-[calc(100vh-275px)]">
+        <table className="w-full min-w-[1050px] text-left text-xs border-collapse">
+          <thead className="sticky top-0 z-10 bg-slate-100 text-slate-700">
+            <tr className="border-b border-slate-200">
+              <th className="p-3 min-w-[200px]">Miembro</th>
+              <th className="p-3 min-w-[100px]">Cuerda</th>
+              <th className="p-3 min-w-[165px]">Iglesia</th>
+              <th className="p-3 min-w-[130px]">Teléfono</th>
+              <th className="p-3 min-w-[190px]">Correo</th>
+              <th className="p-3 text-center min-w-[90px]">Cumpleaños</th>
+              <th className="p-3 text-center min-w-[100px]">Asistencia</th>
+              <th className="p-3 text-center min-w-[95px]">Estado</th>
+              {(puedeEditar || puedeEliminar) && <th className="p-3 text-right min-w-[160px]">Acciones</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {integrantes.map(item => {
+              const stats = calcularEstadisticasMiembro(item, eventos, asistencias);
+              const asistencia = stats.total > 0 ? `${stats.porcentaje}%` : '—';
+              return (
+                <tr
+                  key={item.id}
+                  onClick={() => onAbrirFicha(item)}
+                  className="hover:bg-sky-50/50 transition-colors cursor-pointer"
+                >
+                  <td className="p-3 font-bold text-slate-900">
+                    <div className="flex items-center gap-2.5">
+                      {item.fotoUrl ? (
+                        <img src={item.fotoUrl} alt="" className="w-7 h-7 rounded-lg object-cover border border-slate-200" />
+                      ) : (
+                        <div className="w-7 h-7 rounded-lg bg-sky-50 border border-sky-100 text-[#0077B6] flex items-center justify-center text-[10px] font-black">
+                          {item.nombreCompleto.split(' ').filter(Boolean).slice(0, 2).map(palabra => palabra[0]).join('')}
+                        </div>
+                      )}
+                      <span>{item.nombreCompleto}</span>
+                    </div>
+                  </td>
+                  <td className="p-3">
+                    <span className="px-2 py-1 rounded-md text-[10px] font-bold bg-sky-100/70 text-[#0077B6]">{item.cuerda}</span>
+                  </td>
+                  <td className="p-3 text-slate-600">{item.iglesia}</td>
+                  <td className="p-3 text-slate-600">{item.telefono || '—'}</td>
+                  <td className="p-3 text-slate-600">{item.email || '—'}</td>
+                  <td className="p-3 text-center font-semibold text-slate-600">{fechaCorta(item.fechaNacimiento)}</td>
+                  <td className={`p-3 text-center font-black ${
+                    stats.total === 0 ? 'text-slate-300' : stats.porcentaje >= 80 ? 'text-emerald-700' : stats.porcentaje >= 65 ? 'text-amber-700' : 'text-rose-700'
+                  }`}>
+                    {asistencia}
+                  </td>
+                  <td className="p-3 text-center">
+                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${item.estado === 'Activo' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                      {item.estado}
+                    </span>
+                  </td>
+                  {(puedeEditar || puedeEliminar) && (
+                    <td className="p-3 text-right" onClick={event => event.stopPropagation()}>
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {puedeEditar && (
+                          <button
+                            onClick={() => onEditar(item)}
+                            className="px-2 py-1.5 text-[10px] font-bold text-[#0077B6] bg-sky-50 hover:bg-sky-100 rounded-lg"
+                          >
+                            Editar
+                          </button>
+                        )}
+                        {puedeEditar && item.estado === 'Activo' && (
+                          <button
+                            onClick={() => onMarcarInactivo(item)}
+                            className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg"
+                            title="Marcar como inactivo"
+                          >
+                            <UserX className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {puedeEliminar && (
+                          <button
+                            onClick={() => onEliminar(item)}
+                            className="p-1.5 text-slate-400 hover:text-[#8B1E2B] hover:bg-rose-50 rounded-lg"
+                            title="Eliminar miembro"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 export const VistaDirectorio: React.FC = () => {
   const {
     integrantes,
@@ -287,7 +415,7 @@ export const VistaDirectorio: React.FC = () => {
   };
 
   return (
-    <div className="space-y-3 max-w-3xl mx-auto pb-16">
+    <div className="space-y-3 max-w-3xl lg:max-w-7xl mx-auto pb-16">
       {/* Barra de Filtros y Acciones */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3">
         <div className="flex items-center justify-between gap-2">
@@ -350,33 +478,48 @@ export const VistaDirectorio: React.FC = () => {
         </div>
       </div>
 
-      {/* Listado compacto */}
-      <div className="space-y-1.5">
-        {integrantesFiltrados.length === 0 && (
-          <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-8 text-center">
-            <Users className="w-6 h-6 text-slate-300 mx-auto mb-2" />
-            <p className="text-xs text-slate-500 font-medium">No hay integrantes que coincidan con el filtro.</p>
+      {integrantesFiltrados.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-8 text-center">
+          <Users className="w-6 h-6 text-slate-300 mx-auto mb-2" />
+          <p className="text-xs text-slate-500 font-medium">No hay integrantes que coincidan con el filtro.</p>
+        </div>
+      ) : (
+        <>
+          {/* Móvil: filas grandes y táctiles. */}
+          <div className="space-y-1.5 lg:hidden">
+            {integrantesFiltrados.map(item => {
+              const stats = calcularEstadisticasMiembro(item, eventos, asistencias);
+              return (
+                <FilaMiembro
+                  key={item.id}
+                  item={item}
+                  puedeEditar={puede('editar_miembro')}
+                  puedeEliminar={puede('eliminar_miembro')}
+                  porcentaje={stats.porcentaje}
+                  citaciones={stats.total}
+                  onAbrirFicha={i => setPerfilSeleccionadoId(i.id)}
+                  onEditar={abrirParaEditar}
+                  onMarcarInactivo={marcarComoInactivo}
+                  onEliminar={confirmarEliminar}
+                />
+              );
+            })}
           </div>
-        )}
 
-        {integrantesFiltrados.map(item => {
-          const stats = calcularEstadisticasMiembro(item, eventos, asistencias);
-          return (
-            <FilaMiembro
-              key={item.id}
-              item={item}
-              puedeEditar={puede('editar_miembro')}
-              puedeEliminar={puede('eliminar_miembro')}
-              porcentaje={stats.porcentaje}
-              citaciones={stats.total}
-              onAbrirFicha={i => setPerfilSeleccionadoId(i.id)}
-              onEditar={abrirParaEditar}
-              onMarcarInactivo={marcarComoInactivo}
-              onEliminar={confirmarEliminar}
-            />
-          );
-        })}
-      </div>
+          {/* Escritorio: directorio tipo planilla para aprovechar el ancho. */}
+          <TablaMiembros
+            integrantes={integrantesFiltrados}
+            eventos={eventos}
+            asistencias={asistencias}
+            puedeEditar={puede('editar_miembro')}
+            puedeEliminar={puede('eliminar_miembro')}
+            onAbrirFicha={i => setPerfilSeleccionadoId(i.id)}
+            onEditar={abrirParaEditar}
+            onMarcarInactivo={marcarComoInactivo}
+            onEliminar={confirmarEliminar}
+          />
+        </>
+      )}
 
       {/* Ficha del miembro (componente compartido con Métricas) */}
       {perfilSeleccionado && (

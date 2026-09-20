@@ -3,6 +3,7 @@
 import React, { useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { obtenerProximoCumpleanos } from '@/lib/cumpleanos';
 import {
   CalendarClock,
   Calendar,
@@ -15,12 +16,14 @@ import {
   ChevronRight,
   Users,
   AlertCircle,
-  Clock
+  Clock,
+  Music
 } from 'lucide-react';
 
 interface VistaInicioProps {
   setVistaActual: (v: string) => void;
   onIniciarAsistencia: (eventoId: string) => void;
+  onAbrirAgendaFiltrada: (tipo: string) => void;
 }
 
 const fmtFechaHora = (iso: string) =>
@@ -32,13 +35,17 @@ const fmtFechaHora = (iso: string) =>
     minute: '2-digit'
   });
 
-export const VistaInicio: React.FC<VistaInicioProps> = ({ setVistaActual, onIniciarAsistencia }) => {
+export const VistaInicio: React.FC<VistaInicioProps> = ({
+  setVistaActual,
+  onIniciarAsistencia,
+  onAbrirAgendaFiltrada
+}) => {
   const { eventos, integrantes, asistencias, justificaciones, documentos } = useApp();
   const { puede } = useAuth();
 
   const activos = useMemo(() => integrantes.filter(i => i.estado === 'Activo'), [integrantes]);
 
-  const ahora = new Date();
+  const ahora = useMemo(() => new Date(), []);
 
   // Próxima actividad: la más cercana desde ahora en adelante
   const proximaActividad = useMemo(() => {
@@ -63,23 +70,17 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({ setVistaActual, onInic
     [justificaciones]
   );
 
-  // Cumpleaños de los próximos 30 días
+  // Cumpleaños de los próximos 30 días. Comparte la misma lógica que los
+  // avisos internos, incluido el caso del 29 de febrero.
   const cumpleanosProximos = useMemo(() => {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-
     return activos
-      .filter(i => i.fechaNacimiento)
-      .map(i => {
-        const [anioNac, mesNac, diaNac] = (i.fechaNacimiento as string).split('-').map(Number);
-        let proximo = new Date(hoy.getFullYear(), (mesNac || 1) - 1, diaNac || 1);
-        if (proximo.getTime() < hoy.getTime()) {
-          proximo = new Date(hoy.getFullYear() + 1, (mesNac || 1) - 1, diaNac || 1);
-        }
-        const dias = Math.round((proximo.getTime() - hoy.getTime()) / 86400000);
-        return { integrante: i, dias, fecha: proximo };
+      .map(integrante => {
+        const proximo = obtenerProximoCumpleanos(integrante.fechaNacimiento);
+        return proximo ? { integrante, dias: proximo.diasRestantes, fecha: proximo.fecha } : null;
       })
-      .filter(x => x.dias <= 30)
+      .filter((item): item is { integrante: (typeof activos)[number]; dias: number; fecha: Date } =>
+        item !== null && item.dias <= 30
+      )
       .sort((a, b) => a.dias - b.dias);
   }, [activos]);
 
@@ -128,7 +129,7 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({ setVistaActual, onInic
     justificacionesPendientes.length + listasSinFinalizar.length + cumpleanosProximos.length;
 
   return (
-    <div className="space-y-4 max-w-3xl mx-auto pb-20">
+    <div className="space-y-4 max-w-3xl lg:max-w-6xl mx-auto pb-20">
       {/* Próxima actividad */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 space-y-3">
         <h2 className="text-sm font-bold text-slate-900">Inicio</h2>
@@ -162,32 +163,71 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({ setVistaActual, onInic
             <p className="text-xs text-slate-500 font-medium">No hay actividades próximas agendadas.</p>
           </div>
         )}
+        {puede('ver_agenda') && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+            <button
+              onClick={() => onAbrirAgendaFiltrada('Presentación')}
+              className="text-left rounded-xl p-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors group"
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span className="text-xs font-black text-[#9F1239]">Presentaciones</span>
+                <ChevronRight className="w-4 h-4 text-[#B42335] group-hover:translate-x-0.5 transition-transform" />
+              </span>
+              <span className="text-[10px] text-rose-700/80 block mt-0.5">Ver sólo presentaciones en calendario</span>
+            </button>
+            <button
+              onClick={() => onAbrirAgendaFiltrada('Concierto')}
+              className="text-left rounded-xl p-3 bg-[#FFF8E8] hover:bg-[#FFF1D2] border border-[#E6B95C] transition-colors group"
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-black text-[#805300]">
+                  <Music className="w-3.5 h-3.5" />
+                  Conciertos
+                </span>
+                <ChevronRight className="w-4 h-4 text-[#9A6700] group-hover:translate-x-0.5 transition-transform" />
+              </span>
+              <span className="text-[10px] text-[#805300]/80 block mt-0.5">Ver sólo conciertos en calendario</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Resumen: solo se muestran las cifras que el rol puede conocer */}
       <div className="grid grid-cols-3 gap-2">
         {puede('ver_miembros') && (
-          <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+          <button
+            onClick={() => setVistaActual('directorio')}
+            className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center hover:border-sky-300 hover:bg-sky-50/30 transition-colors"
+            title="Ver miembros activos"
+          >
             <Users className="w-4 h-4 text-[#0099DD] mx-auto mb-1" />
             <span className="text-base font-black text-slate-800 block">{activos.length}</span>
             <span className="text-[10px] text-slate-500 font-semibold">Miembros activos</span>
-          </div>
+          </button>
         )}
         {puede('ver_documentos') && (
-          <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+          <button
+            onClick={() => setVistaActual('documentos')}
+            className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center hover:border-sky-300 hover:bg-sky-50/30 transition-colors"
+            title="Ver documentos institucionales"
+          >
             <FileText className="w-4 h-4 text-slate-500 mx-auto mb-1" />
             <span className="text-base font-black text-slate-800 block">{documentos.length}</span>
             <span className="text-[10px] text-slate-500 font-semibold">Documentos</span>
-          </div>
+          </button>
         )}
         {puede('pasar_lista') && (
-          <div className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center">
+          <button
+            onClick={() => setVistaActual('dashboard')}
+            className="bg-white p-3 rounded-2xl border border-slate-200/80 text-center hover:border-sky-300 hover:bg-sky-50/30 transition-colors"
+            title="Ver métricas de asistencia"
+          >
             <CalendarClock className="w-4 h-4 text-emerald-600 mx-auto mb-1" />
             <span className="text-base font-black text-slate-800 block">
               {resumenMes.porcentaje === null ? '—' : `${resumenMes.porcentaje}%`}
             </span>
             <span className="text-[10px] text-slate-500 font-semibold">Asistencia del mes</span>
-          </div>
+          </button>
         )}
       </div>
 

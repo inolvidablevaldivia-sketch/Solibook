@@ -15,7 +15,9 @@ que la directiva y los miembros ven la misma información en todos sus dispositi
 | `justificaciones` | Solicitudes de justificación de inasistencias                  |
 | `notificaciones` | Avisos del centro de notificaciones (compartidos)               |
 | `documentos`    | Libro de documentos institucionales                              |
+| `documentos_evento` | Enlaces administrativos por actividad, visibles sólo a gestión |
 | `usuarios`      | Directorio de cuentas, roles, estado y vínculo con miembro      |
+| `dispositivos_notificaciones` | Tokens push de cada dispositivo, privados para su titular |
 | `configuracion` | Documento `general` (tipos de evento) y `semillas` (migración)  |
 
 ## Cómo funciona
