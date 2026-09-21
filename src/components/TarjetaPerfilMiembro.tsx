@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { Integrante, DocumentoAdjunto } from '@/types';
 import { comprimirImagenABase64 } from '@/lib/imageCompressor';
 import { esEnlaceValido, normalizarEnlace, detectarServicio, pareceEnlacePrivado } from '@/lib/enlaces';
@@ -19,7 +20,8 @@ import {
   FileText,
   ExternalLink,
   AlertTriangle,
-  Loader2
+  Loader2,
+  ShieldCheck
 } from 'lucide-react';
 
 // Estadísticas individuales de un miembro. Se expone para que Métricas use
@@ -80,6 +82,7 @@ export const TarjetaPerfilMiembro: React.FC<TarjetaPerfilMiembroProps> = ({
 }) => {
   const { eventos, asistencias, actualizarIntegrante, agregarDocumentoMiembro, eliminarDocumentoMiembro } =
     useApp();
+  const { usuarios, vincularIntegrante, puedeAceptarIngresos } = useAuth();
 
   const [modalDocumento, setModalDocumento] = useState(false);
   const [tituloDoc, setTituloDoc] = useState('');
@@ -96,6 +99,9 @@ export const TarjetaPerfilMiembro: React.FC<TarjetaPerfilMiembroProps> = ({
   );
 
   const documentos: DocumentoAdjunto[] = integrante.documentos || [];
+  const cuentaVinculada = usuarios.find(u => u.integranteId === integrante.id);
+  // Sólo cuentas que hoy no tienen ficha: una ficha, una cuenta.
+  const cuentasLibres = usuarios.filter(u => !u.integranteId && u.uid !== cuentaVinculada?.uid);
 
   const iniciales = integrante.nombreCompleto
     .split(' ')
@@ -286,6 +292,47 @@ export const TarjetaPerfilMiembro: React.FC<TarjetaPerfilMiembroProps> = ({
                   <span className="text-slate-400 block text-[10px]">Email</span>
                   <span className="truncate block font-medium">{integrante.email || 'No registrado'}</span>
                 </div>
+              </div>
+              {/* Cuenta de acceso. La ficha existe aunque nadie tenga correo:
+                  sirve para las estadísticas y un día se vincula. */}
+              <div className="col-span-2 flex flex-wrap items-start justify-between gap-2">
+                <div className="flex items-start gap-1.5 min-w-0">
+                  <ShieldCheck className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <span className="text-slate-400 block text-[10px]">Cuenta de la app</span>
+                    {cuentaVinculada ? (
+                      <span className="truncate block font-medium">
+                        {cuentaVinculada.nombre}
+                        {cuentaVinculada.estadoIngreso && cuentaVinculada.estadoIngreso !== 'Aceptado'
+                          ? ` · ${cuentaVinculada.estadoIngreso.toLowerCase()}` : ''}
+                      </span>
+                    ) : (
+                      <span className="font-medium text-slate-400">Sin cuenta (ficha creada a mano)</span>
+                    )}
+                  </div>
+                </div>
+                {puedeAceptarIngresos && (
+                  <select
+                    value=""
+                    onChange={e => {
+                      if (!e.target.value) return;
+                      if (e.target.value === 'quitar') vincularIntegrante(cuentaVinculada!.uid, undefined);
+                      else if (confirm(`¿Vincular la cuenta de ${cuentasLibres.find(u => u.uid === e.target.value)?.nombre} a esta ficha? Quedará como su cuenta de acceso.`)) {
+                        vincularIntegrante(e.target.value, integrante.id);
+                      }
+                    }}
+                    className="px-2 py-1 text-[10px] border border-slate-200 rounded-lg bg-white text-slate-600 max-w-[45%]"
+                  >
+                    <option value="">{cuentaVinculada ? 'Cambiar vínculo…' : 'Vincular una cuenta…'}</option>
+                    {cuentasLibres.map(u => (
+                      <option key={u.uid} value={u.uid}>
+                        {u.nombre}
+                        {u.email ? ` · ${u.email}` : ''}
+                      </option>
+                    ))}
+                    {cuentaVinculada && <option value="quitar">Dejar la ficha sin cuenta</option>}
+                  </select>
+                )}
               </div>
               <div className="col-span-2 flex items-start gap-1.5">
                 <MapPin className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />

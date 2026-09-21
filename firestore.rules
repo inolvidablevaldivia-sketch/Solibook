@@ -703,8 +703,10 @@ service cloud.firestore {
     }
 
     match /documentos_evento/{id} {
-      allow get: if esGestion() || (activo() && convocadoA(resource.data.get('eventoId', '')));
-      allow list: if esGestion();
+      // Lectura filtrada: un Miembro recibe sólo los adjuntos de las actividades
+      // donde está citado (la regla se evalúa por documento, por eso consulta la
+      // convocatoria en vez de confiar en el que pide). Escribir es de agenda.
+      allow read: if esGestion() || (activo() && convocadoA(resource.data.get('eventoId', '')));
       allow write: if puedeAgenda();
     }
 
