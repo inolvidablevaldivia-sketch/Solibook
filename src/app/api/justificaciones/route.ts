@@ -5,6 +5,7 @@ import { prepararAvisoGestion } from '@/lib/prepararAvisoGestion';
 import { enviarColaAvisos } from '@/lib/enviarColaAvisos';
 import { obtenerFirebaseAdmin } from '@/lib/firebaseAdmin';
 import { eventoJustificable, puedeJustificarPorOtros, validarSolicitudJustificacion } from '@/lib/justificaciones';
+import { puedeConAtribuciones } from '@/lib/permisos';
 import type { Evento, Integrante, Justificacion, UsuarioApp } from '@/types';
 
 export const runtime = 'nodejs';
@@ -44,7 +45,10 @@ export async function POST(request: Request) {
       const usuarioDoc = await tx.get(db.doc(`usuarios/${uid}`));
       const usuario = usuarioDoc.data() as UsuarioApp | undefined;
       if (!usuario?.activo) throw new Rechazo('Tu cuenta no está activa.', 403);
-      const gestion = puedeJustificarPorOtros(usuario.rol);
+      // Quién justifica a otro: por cargo, o porque tiene la atribución de
+      // resolver justificativos (que es más capacidad, no menos).
+      const gestion = puedeJustificarPorOtros(usuario.rol)
+        || puedeConAtribuciones(usuario.rol, 'resolver_justificaciones', usuario.atribuciones);
       if (!gestion && (usuario.rol !== 'Miembro' || usuario.integranteId !== integranteId)) throw new Rechazo('Solo puedes justificar tus propias actividades.', 403);
       const integranteDoc = await tx.get(db.doc(`integrantes/${integranteId}`));
       if (!integranteDoc.exists) throw new Rechazo('No se encontró la ficha del integrante.', 409);
@@ -70,7 +74,9 @@ export async function POST(request: Request) {
         const justificacion: Justificacion = {
           id, integranteId, eventoId: evento.id, motivo, estado: 'Pendiente',
           canalIngreso: gestion ? 'Secretaria_Manual' : 'App_Integrante',
-          vistoPor: [], fechaIngreso: new Date(ahora).toISOString(), creadoPorUid: uid,
+          vistoPor: [], fechaIngreso: new Date(ahora).toISOString(),
+          creadoPorUid: uid,
+          ...(gestion ? { creadoPorNombre: usuario.nombre, creadoPorRol: usuario.rol } : {}),
           ...(adjuntoUrl ? { adjuntoUrl } : {})
         };
         tx.set(db.doc(`justificaciones/${id}`), justificacion);
@@ -78,7 +84,8 @@ export async function POST(request: Request) {
         avisoIds.push(avisoId);
         tx.set(db.doc(`notificaciones/${avisoId}`), {
           id: avisoId, tipo: 'Justificacion', titulo: 'Justificación pendiente',
-          mensaje: `${integrante.nombreCompleto} · ${evento.titulo} · ${new Date(evento.fechaHoraInicio).toLocaleString('es-CL', { timeZone: 'America/Santiago' })}`,
+          // Si alguien justificó por otra persona, tiene que leerse quién lo hizo.
+          mensaje: `${integrante.nombreCompleto}${gestion ? ` (lo presentó ${usuario.nombre})` : ''} · ${evento.titulo} · ${new Date(evento.fechaHoraInicio).toLocaleString('es-CL', { timeZone: 'America/Santiago' })}`,
           fecha: new Date(ahora).toISOString(), leido: false, accionId: id
         });
       }

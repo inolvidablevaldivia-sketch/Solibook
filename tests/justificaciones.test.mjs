@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
+import nodePath from 'node:path';
 const requireNode = createRequire(import.meta.url);
 
 // Ejecuta los módulos reales, sustituyendo únicamente Firebase y Next en las
@@ -12,7 +13,19 @@ function cargar(ruta, dependencias = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText;
   const modulo = { exports: {} };
-  new Function('require', 'module', 'exports', codigo)(id => dependencias[id] ?? requireNode(id), modulo, modulo.exports);
+  // Los './otro-modulo' se resuelven contra el archivo que importa, así la lógica
+  // de justificaciones puede apoyarse en permisos.ts sin que el test la enumere.
+  const requirePropio = id => {
+    if (Object.prototype.hasOwnProperty.call(dependencias, id)) return dependencias[id];
+    if (id.startsWith('.')) {
+      for (const ext of ['.ts', '.tsx', '/index.ts']) {
+        const candidato = nodePath.join(nodePath.dirname(ruta), id + ext);
+        if (fs.existsSync(candidato)) return cargar(candidato, dependencias);
+      }
+    }
+    return requireNode(id);
+  };
+  new Function('require', 'module', 'exports', codigo)(requirePropio, modulo, modulo.exports);
   return modulo.exports;
 }
 const logica = cargar('src/lib/justificaciones.ts');
@@ -69,6 +82,7 @@ function entorno(rol = 'Miembro') {
   const ruta = cargar('src/app/api/justificaciones/route.ts', {
     '@/lib/firebaseAdmin': { obtenerFirebaseAdmin: () => ({ db }) },
     '@/lib/justificaciones': logica,
+    '@/lib/permisos': cargar('src/lib/permisos.ts'),
     'firebase-admin/auth': { getAuth: () => ({ verifyIdToken: async token => { if (token !== 'valido') throw Error('invalid'); return { uid: 'u1' }; } }) },
     'next/server': { NextResponse: Response, after: () => {} },
     '@/lib/prepararAvisoGestion': { prepararAvisoGestion: async () => {} },

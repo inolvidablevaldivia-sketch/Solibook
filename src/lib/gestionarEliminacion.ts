@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import type { UsuarioApp } from '@/types';
-import { puedeSolicitarEliminacion, rolEliminacion, type CargoFirma, type EntradaEliminacion, type SolicitudEliminacion } from './eliminaciones';
+import { cupoQueSePuedeFirmar, cuposCubiertos, firmaVigente, puedeResolverEliminacion, puedeSolicitarEliminacion, rolEliminacion, type CargoFirma, type EntradaEliminacion, type SolicitudEliminacion } from './eliminaciones';
 
 export class ErrorEliminacion extends Error {
   constructor(message: string, public status = 400, public codigo = 'solicitud_invalida') { super(message); }
@@ -19,13 +19,15 @@ export async function gestionarEliminacion(db: Firestore, uid: string, entrada: 
     const ahora = new Date().toISOString();
     let solicitud: SolicitudEliminacion;
     if (entrada.accion === 'solicitar') {
-      if (!puedeSolicitarEliminacion(rol, entrada.tipo!)) throw new ErrorEliminacion('Tu cargo no puede solicitar esta eliminación.', 403);
+      if (!puedeSolicitarEliminacion(usuario.rol, entrada.tipo!, usuario.atribuciones)) throw new ErrorEliminacion('Tu cargo no puede solicitar esta eliminación.', 403);
       solicitud = { id: idNuevo, tipo: entrada.tipo!, registroId: entrada.registroId!, titulo: '', solicitanteUid: uid, solicitanteNombre: usuario.nombre, creadaEn: ahora, estado: 'Pendiente', firmas: {}, destinatarios: [] };
     } else {
       const previa = await tx.get(db.doc(`solicitudes_eliminacion/${entrada.solicitudId}`));
       if (!previa.exists) throw new ErrorEliminacion('La solicitud ya no existe.', 404);
       solicitud = previa.data() as SolicitudEliminacion;
-      if (!['Director', 'Secretario', 'Desarrollador'].includes(rol) && solicitud.solicitanteUid !== uid) throw new ErrorEliminacion('No puedes resolver esta solicitud.', 403);
+      // Puede resolverla quien ocupa un cupo de firma (por cargo o por atribución)
+      // y, para cancelar, quien la pidió.
+      if (!puedeResolverEliminacion(usuario.rol, usuario.atribuciones) && solicitud.solicitanteUid !== uid) throw new ErrorEliminacion('No puedes resolver esta solicitud.', 403);
       if (solicitud.estado !== 'Pendiente') return { solicitudId: solicitud.id, estado: solicitud.estado, mensaje: `La solicitud ya está ${solicitud.estado.toLowerCase()}.` };
     }
     const registroRef = db.doc(`${solicitud.tipo}/${solicitud.registroId}`);
@@ -37,12 +39,16 @@ export async function gestionarEliminacion(db: Firestore, uid: string, entrada: 
     if (entrada.accion !== 'solicitar' && bloqueo.data()?.solicitudId !== solicitud.id) throw new ErrorEliminacion('El bloqueo no coincide. No se realizó ningún cambio.', 409);
     if (entrada.accion === 'solicitar' && !registro.exists) throw new ErrorEliminacion('El registro ya no existe.', 404);
     if (entrada.accion === 'solicitar') solicitud.titulo = String(registro.data()?.titulo || registro.data()?.asunto || registro.data()?.nombreCompleto || solicitud.registroId).slice(0, 240);
-    const cargos: CargoFirma[] = ['Director', 'Secretario'];
     const activos = usuarios.filter(u => u.activo);
-    const cargosDisponibles = cargos.filter(cargo => activos.some(u => rolEliminacion(u.rol) === cargo));
+    // Cupos disponibles según las cuentas activas, atribuciones incluidas: si un
+    // Ayudante tiene concedido el cupo de Dirección, él puede cubrirlo.
+    const cargosDisponibles = cuposCubiertos(usuarios);
     // Una firma de una cuenta suspendida o que cambió de cargo deja de valer.
-    solicitud.firmas = Object.fromEntries(Object.entries(solicitud.firmas).filter(([cargo, firma]) => activos.some(u => u.uid === firma.uid && rolEliminacion(u.rol) === cargo)));
-    const esFirmante = rol === 'Director' || rol === 'Secretario';
+    solicitud.firmas = Object.fromEntries(
+      Object.entries(solicitud.firmas).filter(([cargo, firma]) => firmaVigente(firma, cargo as CargoFirma, usuarios))
+    );
+    const cupo = cupoQueSePuedeFirmar(usuario.rol, usuario.atribuciones);
+    const esFirmante = !!cupo;
     if (entrada.accion === 'cancelar') {
       if (solicitud.solicitanteUid !== uid) throw new ErrorEliminacion('Solo quien solicitó puede cancelar.', 403);
       solicitud.estado = 'Cancelado';
@@ -53,7 +59,13 @@ export async function gestionarEliminacion(db: Firestore, uid: string, entrada: 
       if (entrada.accion === 'aprobar' && !esFirmante && !directo) throw new ErrorEliminacion('Solo Dirección o Secretaría pueden firmar.', 403);
       if (!registro.exists) throw new ErrorEliminacion('El registro ya no existe. Cancela o rechaza la solicitud para cerrarla.', 409);
       if (!cargosDisponibles.length && !directo) throw new ErrorEliminacion('No hay Director ni Secretario activo que pueda autorizar.', 409);
-      if (esFirmante) solicitud.firmas[rol as CargoFirma] = { uid, nombre: usuario.nombre, fecha: ahora };
+      if (esFirmante) {
+        // Nadie firma dos cupos con la misma cuenta: la doble firma son dos personas.
+        const yaOcupado = (Object.entries(solicitud.firmas) as [CargoFirma, { uid: string }][])
+          .find(([otroCupo, firma]) => otroCupo !== cupo && firma.uid === uid);
+        if (yaOcupado) throw new ErrorEliminacion(`Tu cuenta ya firmó esta solicitud como ${yaOcupado[0]}.`, 409);
+        solicitud.firmas[cupo as CargoFirma] = { uid, nombre: usuario.nombre, fecha: ahora };
+      }
       const completa = cargosDisponibles.length > 0 && cargosDisponibles.every(c => !!solicitud.firmas[c]);
       if (directo || completa) {
         if (!directo && cargosDisponibles.length < 2 && !entrada.aceptarFaltaCargo) throw new ErrorEliminacion(`No hay una cuenta activa de ${cargosDisponibles.includes('Director') ? 'Secretaría' : 'Dirección'}. Se eliminará con la única firma disponible. ¿Continuar?`, 409, 'falta_contraparte');

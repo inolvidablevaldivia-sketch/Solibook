@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { Carta, EstadoCarta } from '@/types';
+import { etiquetaCorta, etiquetaDetalle, normalizarAcuses, yaAcusado } from '@/lib/autorias';
 import {
   Mail,
   Plus,
@@ -28,8 +29,13 @@ interface VistaCartasProps {
 }
 
 export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCarta }) => {
-  const { cartas, agregarCarta, marcarCartaLeida, actualizarEstadoCarta, usuarioActivo } = useApp();
-  const { puede } = useAuth();
+  const { cartas, agregarCarta, marcarCartaLeida, actualizarEstadoCarta, actualizarCarta, solicitarReacuse } = useApp();
+  const { puede, usuario } = useAuth();
+
+  // Corrección de una carta ya registrada (Secretaría). Se guarda firmada y
+  // todos los que la habían leído reciben el aviso.
+  const [corrigiendo, setCorrigiendo] = useState(false);
+  const [correccion, setCorreccion] = useState({ asunto: '', remitenteDestinatario: '', descripcion: '' });
 
   const [filtroFlujo, setFiltroFlujo] = useState<'Todas' | 'Recibida' | 'Emitida'>('Todas');
   const [modalNueva, setModalNueva] = useState(false);
@@ -60,7 +66,7 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
       descripcion,
       fechaDocumento,
       estado: 'Pendiente',
-      vistoPor: [usuarioActivo.iniciales]
+      vistoPor: []
     });
 
     setModalNueva(false);
@@ -110,6 +116,20 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
 
     const splitTexto = doc.splitTextToSize(carta.descripcion, 170);
     doc.text(splitTexto, 20, 75);
+
+    // Constancia: quién registró la carta y quiénes la dieron por leída, con
+    // nombre, cargo y hora. En el papel también tiene que poder saberse.
+    doc.setFontSize(8);
+    doc.setTextColor(90, 90, 90);
+    const acusesPdf = normalizarAcuses(carta.vistoPor);
+    const constancia = [
+      carta.registradaPor ? `Registrada por: ${etiquetaDetalle(carta.registradaPor)}` : '',
+      acusesPdf.length
+        ? `Acuses de recibo: ${acusesPdf.map(a => etiquetaDetalle(a)).join('  |  ')}`
+        : 'Acuses de recibo: sin acuses registrados',
+      carta.ultimaEdicion ? `Última corrección: ${etiquetaDetalle(carta.ultimaEdicion)}` : ''
+    ].filter(Boolean);
+    doc.text(doc.splitTextToSize(constancia.join('\n'), 170), 20, 214);
 
     // Pie de firmas
     doc.line(30, 240, 80, 240);
@@ -166,7 +186,8 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
       {/* Lista de Cartas */}
       <div className="space-y-3">
         {cartasFiltradas.map(carta => {
-          const yaLeido = carta.vistoPor.includes(usuarioActivo.iniciales);
+          const acuses = normalizarAcuses(carta.vistoPor);
+          const yaLeido = yaAcusado(acuses, usuario?.uid || '');
 
           return (
             <RegistroEliminable key={carta.id} tipo="cartas" registroId={carta.id} titulo={carta.asunto}>
@@ -214,20 +235,33 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
               {/* Barra de Acuse y Acciones */}
               <div className="flex items-center justify-between pt-2 border-t border-slate-100 pl-11 text-xs">
                 <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
-                  <span>Visto por directiva:</span>
+                  <span>Visto por:</span>
                   <div className="flex items-center gap-1">
-                    {carta.vistoPor.map((v, i) => (
-                      <span key={i} className="px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded font-semibold text-[10px]">
-                        {v}
+                    {acuses.length === 0 && <span className="text-[10px] text-slate-400">nadie aún</span>}
+                    {acuses.map((autor, i) => (
+                      <span
+                        key={autor.uid || i}
+                        title={etiquetaDetalle(autor)}
+                        className="px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded font-semibold text-[10px]"
+                      >
+                        {etiquetaCorta(autor, acuses)}
                       </span>
                     ))}
                   </div>
+                  {carta.registradaPor && (
+                    <span
+                      title={etiquetaDetalle(carta.registradaPor)}
+                      className="text-[10px] text-slate-400"
+                    >
+                      · registrada por {etiquetaCorta(carta.registradaPor)}
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
                   {!yaLeido && puede('acuse_recibo') && (
                     <button
-                      onClick={() => marcarCartaLeida(carta.id, usuarioActivo.iniciales)}
+                      onClick={() => marcarCartaLeida(carta.id)}
                       className="flex items-center gap-1 text-[11px] text-[#0099DD] font-semibold hover:underline"
                     >
                       <Eye className="w-3.5 h-3.5" />
@@ -373,9 +407,118 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
                 </button>
               </div>
 
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-xs text-slate-700 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
-                {cartaDetalle.descripcion}
-              </div>
+              {(() => {
+                const acuses = normalizarAcuses(cartaDetalle.vistoPor);
+                const propias = acuses.filter(a => a.uid === usuario?.uid);
+                const desactualizada =
+                  !!cartaDetalle.reacuseDesde &&
+                  propias.length > 0 &&
+                  Date.parse(propias[0].fecha || '') < Date.parse(cartaDetalle.reacuseDesde);
+                return (
+                  <div className="space-y-2">
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-xs text-slate-700 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
+                      {cartaDetalle.descripcion}
+                    </div>
+
+                    {cartaDetalle.ultimaEdicion && (
+                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl p-2">
+                        Carta corregida por {etiquetaDetalle(cartaDetalle.ultimaEdicion)}
+                        {desactualizada ? ' · tu acuse es anterior a la corrección' : ''}
+                      </p>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                      <span>Acuses ({acuses.length}):</span>
+                      {acuses.length === 0 && <span className="text-slate-400">nadie ha acusado recibo</span>}
+                      {acuses.map((autor, i) => (
+                        <span
+                          key={autor.uid || i}
+                          title={etiquetaDetalle(autor)}
+                          className="px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded font-semibold text-[10px]"
+                        >
+                          {etiquetaCorta(autor, acuses)}
+                        </span>
+                      ))}
+                      {desactualizada && (
+                        <button
+                          onClick={() => marcarCartaLeida(cartaDetalle.id)}
+                          className="px-2 py-0.5 bg-sky-600 text-white rounded-lg font-semibold text-[10px]"
+                        >
+                          Volver a acusar
+                        </button>
+                      )}
+                      {!desactualizada && puede('gestionar_cartas') && acuses.length > 0 && (
+                        <button
+                          onClick={() => solicitarReacuse(cartaDetalle.id)}
+                          className="px-2 py-0.5 bg-white border border-slate-200 rounded-lg font-semibold text-[10px] text-slate-600"
+                        >
+                          Pedir re-acuse
+                        </button>
+                      )}
+                    </div>
+
+                    {cartaDetalle.registradaPor && (
+                      <p className="text-[11px] text-slate-500">
+                        <span className="font-semibold text-slate-600">Registrada por: </span>
+                        {etiquetaDetalle(cartaDetalle.registradaPor)}
+                      </p>
+                    )}
+
+                    {puede('gestionar_cartas') && (corrigiendo ? (
+                      <div className="space-y-2 border border-slate-200 rounded-xl p-3 bg-slate-50">
+                        <input
+                          value={correccion.asunto}
+                          onChange={e => setCorreccion(c => ({ ...c, asunto: e.target.value }))}
+                          placeholder="Asunto"
+                          className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-lg"
+                        />
+                        <input
+                          value={correccion.remitenteDestinatario}
+                          onChange={e => setCorreccion(c => ({ ...c, remitenteDestinatario: e.target.value }))}
+                          placeholder="Remitente o destinatario"
+                          className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-lg"
+                        />
+                        <textarea
+                          value={correccion.descripcion}
+                          onChange={e => setCorreccion(c => ({ ...c, descripcion: e.target.value }))}
+                          rows={5}
+                          className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-lg"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              if (actualizarCarta(cartaDetalle.id, correccion)) {
+                                setCartaDetalle({ ...cartaDetalle, ...correccion, reacuseDesde: new Date().toISOString() });
+                                setCorrigiendo(false);
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-emerald-700 text-white text-xs font-bold rounded-lg"
+                          >
+                            Guardar corrección y avisar
+                          </button>
+                          <button onClick={() => setCorrigiendo(false)} className="px-3 py-1.5 text-xs text-slate-500">
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setCorreccion({
+                            asunto: cartaDetalle.asunto,
+                            remitenteDestinatario: cartaDetalle.remitenteDestinatario,
+                            descripcion: cartaDetalle.descripcion
+                          });
+                          setCorrigiendo(true);
+                        }}
+                        className="text-[11px] font-semibold text-[#0077B6] underline"
+                      >
+                        Corregir (quedará registrada y se avisa a quien ya la leyó)
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {/* Botón Integrado: Si es una invitación, crear evento en Agenda */}
               {cartaDetalle.tipoFlujo === 'Recibida' && (

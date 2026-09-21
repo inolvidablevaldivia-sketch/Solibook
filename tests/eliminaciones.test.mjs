@@ -3,11 +3,31 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 const requireNode = createRequire(import.meta.url);
+/**
+ * Carga un módulo de producción para probarlo sin duplicar su lógica. Se
+ * transpila a CommonJS y se le da un `require` propio: lo que el test inyecta en
+ * `dependencias` manda (así se reemplaza a Firestore o a `firebase-admin`), y los
+ * `./otros-modulos` se resuelven contra el directorio del archivo que importa,
+ * de manera que la lógica pueda apoyarse en sus vecinos de `src/lib` sin que
+ * cada test tenga que enumerarlos. Un módulo falso con la superficie exacta
+ * descubre que la lógica no depende de nada más.
+ */
 function cargar(ruta, dependencias = {}) {
   const codigo = ts.transpileModule(fs.readFileSync(ruta, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const modulo = { exports: {} };
-  new Function('require', 'module', 'exports', codigo)(id => dependencias[id] ?? requireNode(id), modulo, modulo.exports);
+  const requirePropio = id => {
+    if (Object.prototype.hasOwnProperty.call(dependencias, id)) return dependencias[id];
+    if (id.startsWith('.')) {
+      for (const ext of ['.ts', '.tsx', '/index.ts']) {
+        const candidato = path.join(path.dirname(ruta), id + ext);
+        if (fs.existsSync(candidato)) return cargar(candidato, dependencias);
+      }
+    }
+    return requireNode(id);
+  };
+  new Function('require', 'module', 'exports', codigo)(requirePropio, modulo, modulo.exports);
   return modulo.exports;
 }
 const logica = cargar('src/lib/eliminaciones.ts');

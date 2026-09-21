@@ -4,6 +4,7 @@ import { SolicitudesEliminacion } from './SolicitudesEliminacion';
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { etiquetaCorta, etiquetaDetalle, normalizarAcuses, yaAcusado } from '@/lib/autorias';
 import { useAjustes } from '@/context/AjustesContext';
 import {
   Bell,
@@ -34,10 +35,9 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
     justificaciones,
     resolverJustificacion,
     cartas,
-    marcarCartaLeida,
-    usuarioActivo
+    marcarCartaLeida
   } = useApp();
-  const { puede } = useAuth();
+  const { puede, usuario } = useAuth();
   const { error } = useAjustes();
 
   const [filtro, setFiltro] = useState<'Todos' | 'Justificaciones' | 'Cartas' | 'Actas' | 'Calendario' | 'Eliminaciones'>('Todos');
@@ -125,7 +125,14 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
                     {j.adjuntoUrl && <a href={j.adjuntoUrl} target="_blank" rel="noreferrer" className="block text-xs text-sky-700"><img src={j.adjuntoUrl} alt="Foto adjunta a la justificación" className="max-h-40 rounded-lg" />Ver foto adjunta</a>}
                     <div className="flex items-center justify-between pt-1 border-t border-amber-200/40 text-[11px]">
                       <span className="text-slate-500">
-                        Visto por: {j.vistoPor.length > 0 ? j.vistoPor.join(', ') : 'Nadie aún'}
+                        {j.creadoPorNombre && j.creadoPorNombre !== (integrantes.find(i => i.id === j.integranteId)?.nombreCompleto || '')
+                          ? `Presentada por ${j.creadoPorNombre} · ` : ''}
+                        Visto por:{j.vistoPor.length === 0 ? ' nadie aún' : ''}
+                        {normalizarAcuses(j.vistoPor).map((a, i) => (
+                          <span key={a.uid || i} title={etiquetaDetalle(a)} className="ml-1 font-semibold text-slate-700">
+                            {i > 0 ? ' · ' : ' '}{etiquetaCorta(a)}
+                          </span>
+                        ))}
                       </span>
                       {puede('resolver_justificaciones') && (
                         <div className="flex items-center gap-1.5">
@@ -161,7 +168,8 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
               </h4>
               <div className="space-y-2">
                 {cartas.filter(c => c.estado === 'Pendiente').map(c => {
-                  const yaVisto = c.vistoPor.includes(usuarioActivo.iniciales);
+                  const acuses = normalizarAcuses(c.vistoPor);
+                  const yaVisto = yaAcusado(acuses, usuario?.uid || '');
                   return (
                     <div key={c.id} className="p-3 bg-sky-50/50 border border-sky-200/70 rounded-xl space-y-2">
                       <div className="flex items-start justify-between">
@@ -177,12 +185,17 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
 
                       <div className="flex items-center justify-between pt-1 border-t border-sky-200/40 text-[11px]">
                         <span className="text-slate-500 text-[10px]">
-                          Visto por: {c.vistoPor.length > 0 ? c.vistoPor.join(', ') : 'Sin lecturas'}
+                          Visto por:{acuses.length === 0 ? ' sin lecturas' : ''}
+                          {acuses.map((a, i) => (
+                            <span key={a.uid || i} title={etiquetaDetalle(a)} className="ml-1 font-semibold text-slate-700">
+                              {i > 0 ? ' · ' : ' '}{etiquetaCorta(a)}
+                            </span>
+                          ))}
                         </span>
                         <div className="flex items-center gap-1">
                           {!yaVisto && puede('acuse_recibo') && (
                             <button
-                              onClick={() => marcarCartaLeida(c.id, usuarioActivo.iniciales)}
+                              onClick={() => marcarCartaLeida(c.id)}
                               className="flex items-center gap-1 px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-medium transition-colors"
                             >
                               <Eye className="w-3 h-3 text-[#0099DD]" />

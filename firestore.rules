@@ -1,32 +1,51 @@
 rules_version = '2';
 // ═════════════════════════════════════════════════════════════════════════
-// Reglas de seguridad de Solibook — modelo de roles de la directiva.
+// Reglas de seguridad de Solibook — cargos, atribuciones y trazabilidad.
 //
 // Se publican en: Firebase Console → Firestore Database → Reglas
 // o con: firebase deploy --only firestore:rules
 //
-// Roles (de mayor a menor alcance):
-//   Desarrollador → acceso absoluto, incluidas las cuentas de nivel Director.
-//   Director      → todos los permisos, EXCEPTO eliminar o modificar cuentas
-//                   de nivel Director o Desarrollador.
-//   Director fundador (rol Director + uid en configuracion/estado.fundador)
-//                 → administra cuentas con los mismos permisos del
-//                   Desarrollador, sin cambiar su rol guardado. Es el mismo
-//                   criterio que aplica el servidor en las eliminaciones.
-//   Secretario    → todos los permisos, excepto administrar usuarios y roles.
-//   Tesorero      → Secretario, menos: agregar/eliminar miembros y aprobar o
-//                   rechazar justificaciones.
-//   Directiva     → Tesorero, menos: dar acuse de recibo y eliminar documentos.
-//   Miembro       → calendario y justificaciones propias (alta por API).
-//                   Lee únicamente su propia ficha de integrante.
+// IDEA CENTRAL: el cargo dice quién es la persona (y con qué nombre firma);
+// las atribuciones sólo SUMAN capacidades, nunca quitan. Estas reglas repiten
+// el criterio de `src/lib/permisos.ts` y `src/lib/atributos.ts`: si acá y allá
+// se contradicen, gana la app en la apariencia y la regla en el acceso.
 //
-// Migración: los valores antiguos 'Administrador' y 'Secretaria' se tratan
-// como 'Director' y 'Secretario' mientras las cuentas se actualizan solas.
+// Cargos vigentes:
+//   Desarrollador     → acceso absoluto, incluidas las cuentas de Director.
+//   Director fundador → rol Director + uid en configuracion/estado.fundador:
+//                       administra cuentas como Desarrollador sin cambiar rol.
+//   Director          → todo excepto eliminar o modificar cuentas de nivel
+//                       Director o Desarrollador.
+//   Secretario        → todo excepto administrar cuentas y roles.
+//   Vocal             → agenda, listas, justificativos (aprueba), fichas,
+//                       leer cartas y actas, acusar recibo, firmar el cupo
+//                       opcional de Vocalía, métricas. NO libro de documentos,
+//                       NO registrar/corregir cartas, NO redactar actas, NO
+//                       pantalla de cuentas, NO autoriza borrados, NO ocupa el
+//                       cupo de Dirección.
+//   Tesorero          → leer todo, acusar recibo, crear/editar fichas,
+//                       justificar por otros, libro de documentos completo y el
+//                       cupo de Tesorería en las actas. NO agenda ni listas, NO
+//                       métricas, NO redacta ni borra actas, NO aprueba
+//                       justificativos, NO cuentas, NO aprueba ingresos, y nunca
+//                       autoriza un borrado por sí solo.
+//   Administrativo     → anota la operación (agenda, listas, cartas, actas en
+//                       borrador, fichas, documentos, justificativos) pero no la
+//                       cierra: no cierra listas ni actas, no acusa recibo, no
+//                       aprueba justificativos, no borra nada, no ve cuentas.
+//   Miembro            → su calendario y sus justificativos. Lee sólo su ficha.
+//
+// Altas: una cuenta nueva nace 'Pendiente' y no puede leer nada del ministerio
+// hasta que Dirección o Secretaría la aceptan. Ese filtro vive en
+// `cuentaVigente()`, que es la base de toda escritura de datos compartidos.
+//
+// Migración: 'Administrador' → 'Director', 'Secretaria' → 'Secretario',
+// 'Directiva' → 'Administrativo'. Se normaliza al leer, sin reescribir datos.
 // ═════════════════════════════════════════════════════════════════════════
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ───────────────────────── Funciones auxiliares ─────────────────────────
+    // ───────────────────── Sesión, cargo y atribuciones ─────────────────────
 
     function autenticado() {
       return request.auth != null;
@@ -36,115 +55,294 @@ service cloud.firestore {
       return /databases/$(database)/documents/usuarios/$(uid);
     }
 
+    function rutaFicha(id) {
+      return /databases/$(database)/documents/integrantes/$(id);
+    }
+
+    function rutaEstado() {
+      return /databases/$(database)/documents/configuracion/estado;
+    }
+
     function perfil() {
       return get(rutaUsuario(request.auth.uid)).data;
     }
 
+    // Cuenta que existe y no está suspendida. Basta para la autopista de datos
+    // propios (ajustes, tokens de push, ficha propia), no para los libros.
     function activo() {
       return autenticado()
         && exists(rutaUsuario(request.auth.uid))
-        && perfil().activo == true;
+        && perfil().get('activo', false) == true;
     }
 
-    // Rol vigente del que llama, con migración de valores antiguos al vuelo.
+    // Cargo vigente, con los valores antiguos traducidos al vuelo.
+    function rolDe(p) {
+      let r = p.get('rol', '');
+      return r == 'Administrador' ? 'Director'
+        : r == 'Secretaria' ? 'Secretario'
+        : r == 'Directiva' ? 'Administrativo'
+        : r;
+    }
+
     function rolActual() {
-      return perfil().rol == 'Administrador' ? 'Director'
-        : perfil().rol == 'Secretaria' ? 'Secretario'
-        : perfil().rol;
-    }
-
-    function rolEn(roles) {
-      return activo() && rolActual() in roles;
-    }
-
-    // Gestión diaria del ministerio (todo excepto Miembro).
-    function esGestion() {
-      return rolEn(['Director', 'Secretario', 'Tesorero', 'Directiva', 'Desarrollador']);
-    }
-
-    // Aprueban justificaciones y agregan/eliminan miembros.
-    function esSuperior() {
-      return rolEn(['Director', 'Secretario', 'Desarrollador']);
-    }
-
-    // Dan acuse de recibo (vistoPor) y eliminan documentos institucionales.
-    function tieneAcuseYEliminaDocs() {
-      return rolEn(['Director', 'Secretario', 'Tesorero', 'Desarrollador']);
-    }
-
-    function esDesarrollador() {
-      return rolEn(['Desarrollador']);
+      return rolDe(perfil());
     }
 
     function esFundador() {
-      return exists(/databases/$(database)/documents/configuracion/estado)
-        && get(/databases/$(database)/documents/configuracion/estado).data.fundador == request.auth.uid;
+      return exists(rutaEstado())
+        && get(rutaEstado()).data.get('fundador', '') == request.auth.uid;
     }
 
-    // Director fundador: rol Director vigente y activo, cuyo uid reclamó
-    // configuracion/estado. Opera sobre las cuentas como el Desarrollador
-    // (rolEfectivo en AuthContext y `directo` en gestionarEliminacion.ts).
-    // Un Director que no es fundador NO recibe esta excepción.
-    function esDirectorFundador() {
-      return rolEn(['Director']) && esFundador();
+    // Alta aceptada. Las cuentas anteriores a este flujo no traen el campo y ya
+    // estaban dadas de alta; una cuenta Pendiente, Rechazada o 'Sin respuesta'
+    // no puede tocar nada del ministerio.
+    function altaAceptada(p) {
+      return p.get('estadoIngreso', 'Aceptado') == 'Aceptado';
     }
+
+    function cuentaVigente() {
+      return activo() && altaAceptada(perfil());
+    }
+
+    // Atribución vigente de un perfil: sin `hasta` no vence; si venció, la
+    // firma que ya puso en una solicitud pendiente caduca con ella.
+    function atribucionVigente(p, nombre) {
+      return nombre != ''
+        && p.get('atribuciones', []).exists(a,
+             a.get('atributo', '') == nombre
+             && (a.get('hasta', '') == '' || timestamp(a.get('hasta', '')) > request.time));
+    }
+
+    function tieneAtribucion(nombre) {
+      return atribucionVigente(perfil(), nombre);
+    }
+
+    function cargoEn(lista) {
+      return cuentaVigente() && rolActual() in lista;
+    }
+
+    // Desarrollador o Director fundador: la llave de todo.
+    function esSuperAdmin() {
+      return cargoEn(['Desarrollador']) || (cargoEn(['Director']) && esFundador());
+    }
+
+    // Capacidad = cuenta vigente y (cargo que la incluye o atribución que la
+    // suma). `esSuperAdmin()` entra siempre: su acceso es absoluto.
+    function puede(cargos, atributo) {
+      return esSuperAdmin() || cargoEn(cargos) || (cuentaVigente() && tieneAtribucion(atributo));
+    }
+
+    // Gestión diaria: todo cargo salvo Miembro.
+    function esGestion() {
+      return cuentaVigente()
+        && rolActual() in ['Director', 'Secretario', 'Tesorero', 'Vocal', 'Administrativo', 'Desarrollador'];
+    }
+
+    // ─────────────────────────── Capacidades ───────────────────────────
+
+    function puedeAgenda() {
+      return puede(['Director', 'Secretario', 'Vocal', 'Administrativo'], 'gestionar_agenda');
+    }
+
+    function puedeQuitarActividad() {
+      return puede(['Director', 'Secretario', 'Vocal'], 'eliminar_agenda');
+    }
+
+    function puedePasarListas() {
+      return puede(['Director', 'Secretario', 'Vocal', 'Administrativo'], 'gestionar_listas');
+    }
+
+    // Cerrar la lista es lo que la vuelve registro: el Ayudante no lo hace.
+    function puedeCerrarListas() {
+      return puede(['Director', 'Secretario', 'Vocal'], 'cerrar_listas');
+    }
+
+    function puedeJustificativos() {
+      return puede(['Director', 'Secretario', 'Tesorero', 'Vocal', 'Administrativo'], '');
+    }
+
+    function puedeResolverJustificativos() {
+      return puede(['Director', 'Secretario', 'Vocal'], 'resolver_justificaciones');
+    }
+
+    function puedeVerCorrespondencia() {
+      return puede(['Director', 'Secretario', 'Tesorero', 'Vocal', 'Administrativo'], '');
+    }
+
+    // Registrar cartas y corregirlas: Secretaría y Dirección (y quien reciba la
+    // atribución). El Vocal lee y acusa, pero no escribe en el libro.
+    function puedeGestionarCartas() {
+      return puede(['Director', 'Secretario', 'Administrativo'], 'gestionar_cartas');
+    }
+
+    function puedeAcusarRecibo() {
+      return puede(['Director', 'Secretario', 'Tesorero', 'Vocal'], 'acuse_recibo');
+    }
+
+    function puedeVerActas() {
+      return puede(['Director', 'Secretario', 'Tesorero', 'Vocal', 'Administrativo'], '');
+    }
+
+    // Redactar y guardar actas. Cerrarlas no: eso producen las firmas de cupo.
+    function puedeRedactarActas() {
+      return puede(['Director', 'Secretario', 'Administrativo'], 'gestionar_actas');
+    }
+
+    // Borrar del libro de documentos exige doble firma (Dirección + Secretaría)
+    // y se ejecuta desde /api/eliminaciones; ningún cliente borra aquí.
+
+    function puedeVerDocumentos() {
+      return puede(['Director', 'Secretario', 'Tesorero'], 'ver_documentos');
+    }
+
+    function puedeSubirDocumentos() {
+      return puede(['Director', 'Secretario', 'Tesorero', 'Administrativo'], 'subir_documentos');
+    }
+
+    function puedeFichas() {
+      return puede(['Director', 'Secretario', 'Tesorero', 'Vocal', 'Administrativo'], '');
+    }
+
+    function puedeVerCuentas() {
+      return puede(['Director', 'Secretario'], 'ver_cuentas');
+    }
+
+    // Altas: aceptar, vincular o rechazar una cuenta que llega.
+    function puedeAprobarIngresos() {
+      return puede(['Director', 'Secretario'], 'aprobar_ingresos');
+    }
+
+    // ──────────────────────────── Usuarios ────────────────────────────
 
     function rolValido(rol) {
-      return rol in ['Director', 'Secretario', 'Tesorero', 'Directiva', 'Miembro', 'Desarrollador'];
+      return rol in ['Director', 'Secretario', 'Tesorero', 'Vocal', 'Administrativo', 'Directiva', 'Miembro', 'Desarrollador', 'Administrador', 'Secretaria'];
     }
 
-    // El documento entrante conserva rol, estado y vínculo de ficha del
-    // original (o solo migra un rol antiguo a su equivalente vigente).
+    // Una cuenta que se edita a sí misma no se toca la seguridad: rol, estado,
+    // ficha vinculada, atribuciones, ofertas de cargo y constancias quedan tal
+    // cual. Sin esta comparación, una cuenta Pendiente podría aceptarse sola.
     function sinTocarSeguridad() {
-      return request.resource.data.activo == resource.data.activo
-        && (
-          request.resource.data.rol == resource.data.rol
-          || (resource.data.rol == 'Administrador' && request.resource.data.rol == 'Director')
-          || (resource.data.rol == 'Secretaria' && request.resource.data.rol == 'Secretario')
-        )
-        && (
-          (!('integranteId' in request.resource.data) && !('integranteId' in resource.data))
-          || request.resource.data.integranteId == resource.data.integranteId
-        );
+      let antes = resource.data;
+      let despues = request.resource.data;
+      return antes.get('activo', false) == despues.get('activo', false)
+        && antes.get('rol', '') == despues.get('rol', '')
+        && antes.get('estadoIngreso', 'Aceptado') == despues.get('estadoIngreso', 'Aceptado')
+        && antes.get('integranteId', '') == despues.get('integranteId', '')
+        && antes.get('atribuciones', []) == despues.get('atribuciones', [])
+        && antes.get('ofertaDirector', {}) == despues.get('ofertaDirector', {})
+        && antes.get('ofertaDirectorEmitida', {}) == despues.get('ofertaDirectorEmitida', {})
+        && antes.get('ultimoTraspaso', {}) == despues.get('ultimoTraspaso', {})
+        && antes.get('aceptadoPor', {}) == despues.get('aceptadoPor', {});
     }
 
-    // ──────────────────────── Usuarios y roles ────────────────────────
+    // Aceptar un ingreso: sólo Dirección/Secretaría, sólo sobre una cuenta
+    // Pendiente, y sólo los campos del alta. El vínculo a la ficha lo decide una
+    // persona mirando la pantalla de Cuentas; la unicidad de la ficha la
+    // revisa la app (y la ficha, si no existía, se crea acá arriba).
+    function aceptarIngresoValido() {
+      let antes = resource.data;
+      let despues = request.resource.data;
+      return puedeAprobarIngresos()
+        && antes.get('estadoIngreso', 'Pendiente') == 'Pendiente'
+        && antes.get('activo', false) == true
+        && despues.get('estadoIngreso', '') == 'Aceptado'
+        && despues.get('rol', '') == 'Miembro'
+        && despues.get('activo', false) == true
+        && despues.get('atribuciones', []) == antes.get('atribuciones', [])
+        && despues.diff(antes).affectedKeys()
+             .hasOnly(['estadoIngreso', 'rol', 'integranteId', 'aceptadoPor', 'ultimoAcceso']);
+    }
+
+    // Rechazar: se marca el estado y se suspende; nada más cambia.
+    function rechazarIngresoValido() {
+      let antes = resource.data;
+      let despues = request.resource.data;
+      return puedeAprobarIngresos()
+        && antes.get('estadoIngreso', 'Pendiente') == 'Pendiente'
+        && despues.get('estadoIngreso', '') == 'Rechazado'
+        && despues.get('activo', true) == false
+        && despues.diff(antes).affectedKeys().hasOnly(['estadoIngreso', 'activo', 'ultimoAcceso']);
+    }
+
+    // Vincular ficha y cuenta, en cualquier orden (desde Cuentas o desde la
+    // ficha). La unicidad la revisa la app: al robar un vínculo se limpia el anterior.
+    function vinculoValido() {
+      let antes = resource.data;
+      let despues = request.resource.data;
+      return puedeAprobarIngresos()
+        && despues.diff(antes).affectedKeys().hasOnly(['integranteId', 'ultimoAcceso']);
+    }
+
+    // Atribuciones: las concede sólo quien opera como Desarrollador, y se
+    // escriben en bloque (otorgar o retirar), nunca como parte de otro cambio.
+    function atribucionesValidas() {
+      let antes = resource.data;
+      let despues = request.resource.data;
+      return esSuperAdmin()
+        && despues.diff(antes).affectedKeys().hasOnly(['atribuciones', 'ultimoAcceso'])
+        && despues.get('atribuciones', []).size() <= 12
+        && despues.get('atribuciones', []).all(a,
+             type(a) == 'string'
+             || (a.get('atributo', '') in ['gestionar_agenda', 'eliminar_agenda', 'gestionar_listas', 'cerrar_listas',
+               'gestionar_cartas', 'gestionar_actas', 'ver_documentos', 'subir_documentos', 'acuse_recibo',
+               'resolver_justificaciones', 'ver_metricas', 'ver_cuentas', 'solicitar_borrados', 'eliminar_documento',
+               'eliminar_ficha', 'cupo_direccion', 'cupo_secretaria', 'cupo_tesoreria']
+               && a.get('otorgadoPor', {}).get('uid', '') != ''));
+    }
 
     match /usuarios/{uid} {
-      // Cualquier persona con sesión puede listar las cuentas: la app muestra
-      // nombres de la directiva y cada quien necesita conocer su propio rol.
-      allow read: if autenticado();
+      // Su propia cuenta, siempre: es lo único que necesita quien llega con su
+      // Gmail y todavía está a la espera.
+      allow get: if autenticado();
+      // El padrón completo (correos, atribuciones, ofertas) sólo para quien
+      // administra cuentas o acepta ingresos. La app no lo necesita en ningún
+      // otro lado: los nombres del directorio salen de `integrantes`.
+      allow list: if puedeVerCuentas() || puedeAprobarIngresos() || esSuperAdmin();
 
-      // Registro inicial: solo la propia cuenta, activa y con rol válido.
-      // Toda cuenta nueva entra como 'Miembro'; solo la persona fundadora
-      // (reclamo previo en configuracion/estado) puede nacer como 'Director'.
+      // Alta de la propia cuenta: activa, rol Miembro y Pendiente de aprobación.
+      // La única excepción es la cuenta fundadora, que se reclama antes en
+      // configuracion/estado (transacción atómica) y nace como Director.
+      // Nadie se crea con atribuciones ni con ofertas de cargo encima.
       allow create: if autenticado() && request.auth.uid == uid
-        && request.resource.data.activo == true
-        && rolValido(request.resource.data.rol)
+        && request.resource.data.get('activo', false) == true
+        && rolValido(request.resource.data.get('rol', ''))
+        && !('atribuciones' in request.resource.data)
+        && !('ofertaDirector' in request.resource.data)
+        && !('ofertaDirectorEmitida' in request.resource.data)
+        && !('ultimoTraspaso' in request.resource.data)
         && (
-          request.resource.data.rol == 'Miembro'
-          || (request.resource.data.rol == 'Director' && esFundador())
+          (
+            request.resource.data.get('rol', '') == 'Miembro'
+            && request.resource.data.get('estadoIngreso', 'Pendiente') == 'Pendiente'
+          )
+          || (
+            esFundador()
+            && request.resource.data.get('rol', '') == 'Director'
+            && request.resource.data.get('estadoIngreso', '') == 'Aceptado'
+          )
         );
 
       allow update: if
-        // 1) El Desarrollador —y el Director fundador, con sus mismos
-        //    permisos— puede todo, sobre cualquier cuenta.
-        esDesarrollador()
-        || esDirectorFundador()
+        // 1) Desarrollador y Director fundador: cualquier cuenta.
+        esSuperAdmin()
         // 2) Un Director no fundador administra cuentas NO superiores y jamás
-        //    puede nombrar a alguien Director o Desarrollador. Las cuentas con
-        //    el valor antiguo 'Secretaria' también las puede administrar.
+        //    nombra Director ni Desarrollador.
         || (
-          rolEn(['Director'])
-          && resource.data.rol in ['Secretario', 'Secretaria', 'Tesorero', 'Directiva', 'Miembro']
-          && request.resource.data.rol in ['Secretario', 'Tesorero', 'Directiva', 'Miembro']
+          cargoEn(['Director'])
+          && !esFundador()
+          && rolDe(resource.data) in ['Secretario', 'Tesorero', 'Vocal', 'Administrativo', 'Miembro']
+          && rolDe(request.resource.data) in ['Secretario', 'Tesorero', 'Vocal', 'Administrativo', 'Miembro']
         )
-        // 3) La propia cuenta: solo datos de sesión (último acceso, nombre,
-        //    foto) y la migración del propio rol antiguo. Rol, estado y
-        //    ficha vinculada quedan protegidos.
-        || (autenticado() && request.auth.uid == uid && sinTocarSeguridad());
+        // 3) La propia cuenta: datos de sesión, sin tocar la seguridad.
+        || (autenticado() && request.auth.uid == uid && sinTocarSeguridad())
+        // 4) El alta de quien llega (aceptar, rechazar o vincular ficha).
+        || aceptarIngresoValido()
+        || rechazarIngresoValido()
+        || vinculoValido()
+        // 5) Atribuciones concedidas por quien opera como Desarrollador.
+        || atribucionesValidas();
 
-      // Las cuentas se suspenden, no se borran: el historial conserva autoría.
+      // Las cuentas se suspenden, no se borran: el historial conserva la autoría.
       allow delete: if false;
     }
 
@@ -154,60 +352,94 @@ service cloud.firestore {
         && documento in ['ajustes', 'lecturas'];
     }
 
-    // Avisos dirigidos: solo el servidor crea el contenido. Cada cuenta lee
-    // únicamente su bandeja; las lecturas personales viven en privado/lecturas.
+    // Avisos dirigidos: el contenido lo escribe el servidor (o la app dentro del
+    // propio documento de notificaciones). Cada cuenta lee su bandeja.
     match /usuarios/{uid}/avisos/{id} {
       allow read: if activo() && request.auth.uid == uid;
+      // El aviso de la oferta de cargo lo crea /api/cargos con credenciales de
+      // Admin; desde el cliente no se fabrican avisos ajenos.
       allow write: if false;
     }
 
-    // ──────────────────────── Configuración ────────────────────────
+    // ───────────────────────── Configuración ─────────────────────────
 
     match /configuracion/{documento} {
       allow read: if autenticado();
-      // Cualquier sesión puede crear docs de configuración (la app los siembra
-      // y la persona fundadora reclama "estado" en una transacción atómica).
+      // Cualquier sesión puede crear docs de configuración: la app los siembra y
+      // la persona fundadora reclama "estado" en una transacción atómica. Ese
+      // reclamo es la única escritura que admite sobre "estado".
       allow create: if autenticado();
-      // "estado" guarda el reclamo de fundador: solo el Desarrollador lo toca.
-      // "general" (tipos de evento) y "semillas" (migración): roles de gestión.
-      allow update: if esDesarrollador()
+      // "estado" guarda el reclamo de fundador: sólo el Desarrollador lo toca.
+      allow update: if esSuperAdmin()
         || (documento != 'estado' && esGestion());
       allow delete: if false;
     }
 
-    // ──────────────────────── Agenda y asistencia ────────────────────────
+    // ───────────────────── Agenda y asistencia ─────────────────────
 
-    // Miembro incluido: el calendario es su única vista.
+    // Miembro incluido: el calendario es su vista.
     match /eventos/{id} {
       allow read: if activo();
-      allow write: if esGestion();
+      // Crear y editar la actividad: Director, Secretaría, Vocal y el Ayudante.
+      allow create: if puedeAgenda();
+      // Borrar una actividad es inmediato (no pasa por doble firma), pero no lo
+      // hace cualquiera: el Ayudante del libro no borra.
+      allow delete: if puedeQuitarActividad();
+      // Cerrar la lista de un evento escribe `listaCerradaPor` en el evento; ese
+      // campo y sólo ese pide la capacidad de cierre.
+      allow update: if puedeAgenda()
+        && (
+          request.resource.data.get('listaCerradaPor', '') == resource.data.get('listaCerradaPor', '')
+          || puedeCerrarListas()
+        );
     }
 
     match /asistencias/{id} {
-      allow read, write: if esGestion();
+      // Cada quien lee su propia marca; el paso de lista completo es de gestión.
+      allow read: if esGestion()
+        || (activo() && perfil().get('integranteId', '') != ''
+             && resource.data.get('integranteId', '') == perfil().get('integranteId', ''));
+      allow write: if puedePasarListas();
     }
+
+    // ──────────────────────── Justificativos ────────────────────────
 
     match /justificaciones/{id} {
       allow read: if esGestion()
-        || (activo() && perfil().integranteId == resource.data.integranteId);
-      // Los nuevos envíos pasan por /api/justificaciones: allí se verifican
+        || (activo() && perfil().get('integranteId', '') != ''
+             && perfil().get('integranteId', '') == resource.data.get('integranteId', ''));
+      // Los envíos nuevos pasan por /api/justificaciones: allí se verifican
       // convocatoria, futuro, autoría y duplicados antes del commit atómico.
       allow create: if false;
-      // Editar el contenido: gestión. Cambiar su resolución (aprobar o
-      // rechazar): solo nivel superior. Marcar vistoPor: quienes tienen acuse.
-      allow update: if esGestion()
+      // Contenido: quien lleva el libro de justificativos. Cambiar la resolución
+      // (aprobar/rechazar): sólo Dirección, Secretaría, Vocal o con atribución.
+      // Marcar `vistoPor`: quien puede acusar recibo. La autoría del envío la
+      // pone el servidor y no se reescribe.
+      allow update: if puedeJustificativos()
         && (
-          request.resource.data.estado == resource.data.estado
-          || esSuperior()
+          request.resource.data.get('estado', '') == resource.data.get('estado', '')
+          || puedeResolverJustificativos()
         )
         && (
-          request.resource.data.vistoPor == resource.data.vistoPor
-          || tieneAcuseYEliminaDocs()
+          request.resource.data.get('vistoPor', []) == resource.data.get('vistoPor', [])
+          || puedeAcusarRecibo()
+        )
+        && (
+          request.resource.data.get('creadoPorUid', '') == resource.data.get('creadoPorUid', '')
+        )
+        && (
+          request.resource.data.get('resueltaPorUid', '') == resource.data.get('resueltaPorUid', '')
+          || puedeResolverJustificativos()
         );
-      allow delete: if esSuperior();
+      // Los justificativos no forman parte del doble firma de libros: los borra
+      // quien puede resolverlos, y la autoría del envío queda en el historial.
+      allow delete: if puedeResolverJustificativos();
     }
 
-    // ──────────────────────── Libros ────────────────────────
+    // ───────────────────────────── Libros ─────────────────────────────
+    // Nadie borra un registro de libro desde el cliente: el borrado se pide, se
+    // autoriza con dos cuentas distintas en /api/eliminaciones y recién allí se
+    // elimina. Por eso `allow delete: if false` en los cuatro libros.
 
     // La foto de perfil viaja en Base64 (~30-60 KB) dentro del documento;
     // se topa a ~950 KB para proteger el límite de 1 MB por documento.
@@ -220,94 +452,296 @@ service cloud.firestore {
       let clave = coleccion + '__' + id;
       return !exists(/databases/$(database)/documents/bloqueos_eliminacion/$(clave));
     }
+
     function noEliminado(coleccion, id) {
       let clave = coleccion + '__' + id;
       return !exists(/databases/$(database)/documents/registros_eliminados/$(clave));
     }
+
     match /solicitudes_eliminacion/{id} {
       allow read: if esGestion();
       allow write: if false;
     }
+
     match /bloqueos_eliminacion/{id} {
       allow read: if esGestion();
       allow write: if false;
     }
-    // Auditoría, tombstones y colas solo se escriben desde Admin en servidor.
-    // El candado final deniega acceso cliente a registros_eliminados/cola_avisos.
-    match /integrantes/{id} {
-      allow get: if esGestion() || (activo() && perfil().integranteId == id);
-      allow list: if esGestion();
-      allow create: if esSuperior() && fotoValida() && noEliminado('integrantes', id);
-      allow delete: if false;
-      allow update: if esGestion() && fotoValida() && sinEliminacionPendiente('integrantes', id);
-    }
-    match /cartas/{id} {
+
+    // Auditoría, tombstones y cola de avisos: sólo el servidor las escribe.
+    match /registros_eliminados/{id} {
       allow read: if esGestion();
-      allow create: if esGestion() && noEliminado('cartas', id);
+      allow write: if false;
+    }
+
+    match /cola_avisos/{id} {
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // ── Libro de fichas ──
+    match /integrantes/{id} {
+      allow get: if esGestion()
+        || (activo() && perfil().get('integranteId', '') != '' && perfil().get('integranteId', '') == id);
+      allow list: if puedeFichas();
+      allow create: if puedeFichas() && fotoValida() && noEliminado('integrantes', id);
+      allow update: if puedeFichas() && fotoValida() && sinEliminacionPendiente('integrantes', id);
       allow delete: if false;
-      allow update: if esGestion() && sinEliminacionPendiente('cartas', id)
-        && (request.resource.data.vistoPor == resource.data.vistoPor || tieneAcuseYEliminaDocs());
     }
-    function firmasEdicionActaVigentes() {
-      let director = resource.data.get('firmaEdicionDirectorUid', '');
-      let secretario = resource.data.get('firmaEdicionSecretarioUid', '');
-      return director != '' && secretario != '' && director != secretario
-        && get(rutaUsuario(director)).data.activo == true
-        && get(rutaUsuario(director)).data.rol in ['Director', 'Administrador']
-        && get(rutaUsuario(secretario)).data.activo == true
-        && get(rutaUsuario(secretario)).data.rol in ['Secretario', 'Secretaria'];
+
+    // ── Libro de correspondencia ──
+    // Un update que sólo agrega acuses: mismo asunto, mismo cuerpo, mismo estado,
+    // y `vistoPor` más largo que antes.
+    function soloAcuse() {
+      let antes = resource.data;
+      let despues = request.resource.data;
+      return puedeAcusarRecibo()
+        && despues.get('asunto', '') == antes.get('asunto', '')
+        && despues.get('descripcion', '') == antes.get('descripcion', '')
+        && despues.get('folio', '') == antes.get('folio', '')
+        && despues.get('registradaPor', {}) == antes.get('registradaPor', {})
+        && despues.get('estado', '') == antes.get('estado', '')
+        && despues.get('ultimaEdicion', {}) == antes.get('ultimaEdicion', {})
+        && despues.get('vistoPor', []).size() >= antes.get('vistoPor', []).size();
     }
+
+    function contenidoCartaValido() {
+      let antes = resource.data;
+      let despues = request.resource.data;
+      // Quien registra no reescribe la autoría de quien registró antes.
+      return !('registradaPor' in antes)
+        || despues.get('registradaPor', {}) == antes.get('registradaPor', {});
+    }
+
+    match /cartas/{id} {
+      allow read: if puedeVerCorrespondencia();
+      allow create: if puedeGestionarCartas() && noEliminado('cartas', id);
+      allow delete: if false;
+      // El acuse de recibo se suma, no se borra: sólo crece la lista `vistoPor`.
+      // La corrección del texto (Secretaría) y el pedido de re-acuse requieren
+      // gestionar la carta; quien acusa no puede cambiar el contenido.
+      allow update: if sinEliminacionPendiente('cartas', id)
+        && (
+          (puedeGestionarCartas() && contenidoCartaValido())
+          || soloAcuse()
+        );
+    }
+
+    // ── Libro de actas ──
+    // Tres cupos obligatorios (Dirección, Secretaría, Tesorería) y uno opcional
+    // (Vocalía). El acta se cierra sola cuando las tres cuentas distintas firman,
+    // y para editarla hace falta la autorización de Dirección Y Secretaría.
+
+    function camposDeFirma() {
+      return ['estado', 'version', 'firmas',
+        'aprobadoPresidente', 'aprobadoSecretaria', 'aprobadoTesoreria', 'aprobadoVocalia',
+        'firmaEdicionDirectorUid', 'firmaEdicionSecretarioUid', 'firmaEdicionTesoreroUid', 'firmaEdicionVocalUid',
+        'editadaPor', 'edicionAutorizadaPor'];
+    }
+
+    // Al guardar una edición autorizada se pueden tocar además los campos del
+    // texto del acta. Se escribe la lista completa: las reglas no tienen `concat`.
+    function camposDeEdicion() {
+      return ['estado', 'version', 'firmas',
+        'aprobadoPresidente', 'aprobadoSecretaria', 'aprobadoTesoreria', 'aprobadoVocalia',
+        'firmaEdicionDirectorUid', 'firmaEdicionSecretarioUid', 'firmaEdicionTesoreroUid', 'firmaEdicionVocalUid',
+        'editadaPor', 'edicionAutorizadaPor',
+        'temasTratados', 'acuerdos', 'backupAnterior', 'titulo', 'fechaReunion', 'eventoId', 'fotoManuscritaUrl'];
+    }
+
+    // Los campos espejo tienen que decir lo mismo que el mapa `firmas`: sin esta
+    // coherencia alguien podría marcar `aprobadoPresidente: true` sin firmar.
+    function espejosCoherentes(d) {
+      let f = d.get('firmas', {});
+      return d.get('aprobadoPresidente', false) == (f.get('Director', {}).get('uid', '') != '')
+        && d.get('aprobadoSecretaria', false) == (f.get('Secretario', {}).get('uid', '') != '')
+        && d.get('aprobadoTesoreria', false) == (f.get('Tesorero', {}).get('uid', '') != '')
+        && d.get('aprobadoVocalia', false) == (f.get('Vocal', {}).get('uid', '') != '')
+        && d.get('firmaEdicionDirectorUid', '') == f.get('Director', {}).get('uid', '')
+        && d.get('firmaEdicionSecretarioUid', '') == f.get('Secretario', {}).get('uid', '')
+        && d.get('firmaEdicionTesoreroUid', '') == f.get('Tesorero', {}).get('uid', '')
+        && d.get('firmaEdicionVocalUid', '') == f.get('Vocal', {}).get('uid', '');
+    }
+
+    // ¿La cuenta indicada puede ocupar ese cupo, hoy? Por cargo o por atribución
+    // concedida. Lee el documento de la otra cuenta, como hace la app.
+    // Las reglas no tienen `null` ni `if`: se lee el documento sólo si existe,
+    // con un ternario, y un uid vacío o borrado queda negado por `hay`.
+    function ocupaCupo(uidCupo, cupo) {
+      let hay = uidCupo != '' && exists(rutaUsuario(uidCupo));
+      let p = hay ? get(rutaUsuario(uidCupo)).data : {};
+      let rol = rolDe(p);
+      let prestamo = cupo == 'Director' ? 'cupo_direccion'
+        : cupo == 'Secretario' ? 'cupo_secretaria'
+        : cupo == 'Tesorero' ? 'cupo_tesoreria'
+        : '';
+      let propio = cupo == 'Director' ? rol in ['Director', 'Desarrollador']
+        : cupo == 'Secretario' ? rol == 'Secretario'
+        : cupo == 'Tesorero' ? rol == 'Tesorero'
+        : rol == 'Vocal';
+      return hay
+        && p.get('activo', false) == true
+        && (propio || atribucionVigente(p, prestamo));
+    }
+
+    function firmantesDistintos(d) {
+      let f = d.get('firmas', {});
+      let uno = f.get('Director', {}).get('uid', '');
+      let dos = f.get('Secretario', {}).get('uid', '');
+      let tres = f.get('Tesorero', {}).get('uid', '');
+      return uno != '' && dos != '' && tres != ''
+        && uno != dos && uno != tres && dos != tres;
+    }
+
+    // La firma que entra en este update es la de quien llama, y sólo en el cupo
+    // que su cargo (o su atribución) le permite ocupar.
+    function firmaPropiaValida(d) {
+      let antes = resource.data.get('firmas', {});
+      let despues = d.get('firmas', {});
+      let firmante = request.auth.uid;
+      // Qué cupos se están poniendo en este update.
+      let nuevoDirector = despues.get('Director', {}).get('uid', '') != '' && antes.get('Director', {}).get('uid', '') == '';
+      let nuevoSecretario = despues.get('Secretario', {}).get('uid', '') != '' && antes.get('Secretario', {}).get('uid', '') == '';
+      let nuevoTesorero = despues.get('Tesorero', {}).get('uid', '') != '' && antes.get('Tesorero', {}).get('uid', '') == '';
+      let nuevoVocal = despues.get('Vocal', {}).get('uid', '') != '' && antes.get('Vocal', {}).get('uid', '') == '';
+      let cuantos = (nuevoDirector ? 1 : 0) + (nuevoSecretario ? 1 : 0) + (nuevoTesorero ? 1 : 0) + (nuevoVocal ? 1 : 0);
+      // Toda firma nueva tiene que ser la de quien llama.
+      let todasMias = (!nuevoDirector || despues.get('Director', {}).get('uid', '') == firmante)
+        && (!nuevoSecretario || despues.get('Secretario', {}).get('uid', '') == firmante)
+        && (!nuevoTesorero || despues.get('Tesorero', {}).get('uid', '') == firmante)
+        && (!nuevoVocal || despues.get('Vocal', {}).get('uid', '') == firmante);
+      // Y la cuenta no puede ocupar dos cupos del mismo acta.
+      let veces = (despues.get('Director', {}).get('uid', '') == firmante ? 1 : 0)
+        + (despues.get('Secretario', {}).get('uid', '') == firmante ? 1 : 0)
+        + (despues.get('Tesorero', {}).get('uid', '') == firmante ? 1 : 0)
+        + (despues.get('Vocal', {}).get('uid', '') == firmante ? 1 : 0);
+      let cupoHabil = (nuevoDirector && ocupaCupo(firmante, 'Director'))
+        || (nuevoSecretario && ocupaCupo(firmante, 'Secretario'))
+        || (nuevoTesorero && ocupaCupo(firmante, 'Tesorero'))
+        || (nuevoVocal && ocupaCupo(firmante, 'Vocal'));
+      return cuantos == 0 || (cuentaVigente() && cuantos == 1 && todasMias && veces <= 1 && cupoHabil);
+    }
+
+    // Qué cupo puede firmar mientras el acta está en solicitud de apertura.
+    function cupoAutorizaApertura(d) {
+      let antes = resource.data.get('firmas', {});
+      let despues = d.get('firmas', {});
+      return (antes.get('Tesorero', {}).get('uid', '') != '' || despues.get('Tesorero', {}).get('uid', '') == '')
+        && (antes.get('Vocal', {}).get('uid', '') != '' || despues.get('Vocal', {}).get('uid', '') == '');
+    }
+
     function transicionEdicionActaValida() {
       let nuevo = request.resource.data;
       let anterior = resource.data;
       let campos = nuevo.diff(anterior).affectedKeys();
-      let firmas = ['estado', 'aprobadoPresidente', 'aprobadoSecretaria', 'firmaEdicionDirectorUid', 'firmaEdicionSecretarioUid'];
       return (
-        anterior.estado in ['Cerrada', 'Borrador'] && nuevo.estado == 'En_Solicitud_Edicion'
-        && campos.hasOnly(firmas) && nuevo.aprobadoPresidente == false && nuevo.aprobadoSecretaria == false
-        && nuevo.firmaEdicionDirectorUid == '' && nuevo.firmaEdicionSecretarioUid == ''
-      ) || (
-        anterior.estado == 'En_Solicitud_Edicion' && campos.hasOnly(firmas)
-        && (
-          (nuevo.aprobadoPresidente == anterior.aprobadoPresidente && nuevo.get('firmaEdicionDirectorUid', '') == anterior.get('firmaEdicionDirectorUid', ''))
-          || (rolEn(['Director']) && nuevo.aprobadoPresidente == true && nuevo.firmaEdicionDirectorUid == request.auth.uid)
+        // (a) Pedir abrir el acta: se limpian las firmas y queda a espera del
+        // doble check. Cualquier cargo que lea actas puede pedirla (Tesorería y
+        // Vocalía piden, no autorizan).
+        (
+          anterior.get('estado', '') in ['Cerrada', 'Borrador']
+          && nuevo.get('estado', '') == 'En_Solicitud_Edicion'
+          && campos.hasOnly(camposDeFirma())
+          && puedeVerActas()
+          && nuevo.get('firmas', {}).size() == 0
         )
-        && (
-          (nuevo.aprobadoSecretaria == anterior.aprobadoSecretaria && nuevo.get('firmaEdicionSecretarioUid', '') == anterior.get('firmaEdicionSecretarioUid', ''))
-          || (rolEn(['Secretario']) && nuevo.aprobadoSecretaria == true && nuevo.firmaEdicionSecretarioUid == request.auth.uid)
+        // (b) Autorizar la apertura: Dirección y Secretaría con dos cuentas.
+        // Tesorería y Vocalía pueden firmar su cupo en un borrador, pero no
+        // autorizar la reapertura.
+        || (
+          anterior.get('estado', '') in ['En_Solicitud_Edicion', 'Borrador']
+          && nuevo.get('estado', '') in ['En_Solicitud_Edicion', 'Borrador', 'Cerrada']
+          && campos.hasOnly(camposDeFirma())
+          && espejosCoherentes(nuevo)
+          && firmaPropiaValida(nuevo)
+          // En plena solicitud de apertura sólo Dirección y Secretaría firman: el
+          // Tesorero vuelve a firmar más tarde, sobre el texto corregido.
+          && (anterior.get('estado', '') != 'En_Solicitud_Edicion' || cupoAutorizaApertura(nuevo))
+          && (
+            nuevo.get('estado', '') != 'Borrador'
+            || (
+              ocupaCupo(nuevo.get('firmas', {}).get('Director', {}).get('uid', ''), 'Director')
+              && ocupaCupo(nuevo.get('firmas', {}).get('Secretario', {}).get('uid', ''), 'Secretario')
+              && nuevo.get('firmas', {}).get('Director', {}).get('uid', '') != nuevo.get('firmas', {}).get('Secretario', {}).get('uid', '')
+            )
+          )
+          // El cierre exige los tres cupos obligatorios, en cuentas distintas y
+          // todavía hábiles. Con eso no hay acta que se cierre con una sola mano.
+          && (
+            nuevo.get('estado', '') != 'Cerrada'
+            || (
+              firmantesDistintos(nuevo)
+              && ocupaCupo(nuevo.get('firmas', {}).get('Tesorero', {}).get('uid', ''), 'Tesorero')
+              && anterior.get('version', 0) + 1 >= nuevo.get('version', 0)
+            )
+          )
         )
-        && (nuevo.aprobadoPresidente && nuevo.aprobadoSecretaria
-          ? nuevo.estado == 'Borrador' && nuevo.firmaEdicionDirectorUid != nuevo.firmaEdicionSecretarioUid
-          : nuevo.estado == 'En_Solicitud_Edicion')
-      ) || (
-        anterior.estado == 'Borrador' && anterior.aprobadoPresidente && anterior.aprobadoSecretaria
-        && firmasEdicionActaVigentes() && nuevo.estado == 'Cerrada' && nuevo.version == anterior.version + 1
-        && campos.hasOnly(['estado', 'version', 'temasTratados', 'acuerdos', 'backupAnterior'])
+        // (c) Guardar una edición ya autorizada: se reescribe el texto, sube la
+        // versión, se guarda el respaldo y las firmas de cierre se limpian para
+        // que los tres cupos vuelvan a firmar sobre el texto nuevo.
+        || (
+          anterior.get('estado', '') == 'Borrador'
+          && nuevo.get('estado', '') == 'Borrador'
+          && puedeRedactarActas()
+          && ocupaCupo(anterior.get('firmas', {}).get('Director', {}).get('uid', ''), 'Director')
+          && ocupaCupo(anterior.get('firmas', {}).get('Secretario', {}).get('uid', ''), 'Secretario')
+          && anterior.get('firmas', {}).get('Director', {}).get('uid', '') != anterior.get('firmas', {}).get('Secretario', {}).get('uid', '')
+          && campos.hasOnly(camposDeEdicion())
+          && nuevo.get('version', 0) == anterior.get('version', 0) + 1
+          && nuevo.get('firmas', {}).size() == 0
+          && espejosCoherentes(nuevo)
+        )
       );
     }
+
     match /actas/{id} {
-      allow read: if esGestion();
-      allow create: if esGestion() && noEliminado('actas', id);
+      allow read: if puedeVerActas();
+      allow create: if puedeRedactarActas()
+        && noEliminado('actas', id)
+        && request.resource.data.get('estado', '') == 'Borrador'
+        && request.resource.data.get('firmas', {}).size() == 0
+        && request.resource.data.get('version', 0) == 1;
       allow delete: if false;
-      allow update: if esGestion() && sinEliminacionPendiente('actas', id) && transicionEdicionActaValida();
+      allow update: if sinEliminacionPendiente('actas', id) && transicionEdicionActaValida();
     }
+
+    // ── Libro de documentos institucionales ──
     match /documentos/{id} {
-      allow read: if esGestion();
-      allow create: if esGestion() && noEliminado('documentos', id);
-      allow update: if esGestion() && sinEliminacionPendiente('documentos', id);
+      allow read: if puedeVerDocumentos();
+      allow create: if puedeSubirDocumentos() && noEliminado('documentos', id);
+      allow update: if puedeSubirDocumentos() && sinEliminacionPendiente('documentos', id);
       allow delete: if false;
     }
 
-    // Adjuntos de actividades: se mantienen fuera de /eventos para que el
-    // rol Miembro pueda consultar el calendario sin obtener enlaces a cartas,
-    // autorizaciones u otros antecedentes administrativos.
+    // Adjuntos de actividades: se mantienen fuera de /eventos para que el rol
+    // Miembro pueda consultar el calendario sin obtener enlaces a documentos
+    // administrativos. El Miembro ve los de las actividades donde está citado,
+    // y no los puede editar.
+    function convocadoA(eventoId) {
+      let ruta = /databases/$(database)/documents/eventos/$(eventoId);
+      let hay = eventoId != '' && exists(ruta);
+      let ficha = perfil().get('integranteId', '');
+      let e = hay ? get(ruta).data : {};
+      let tieneFicha = ficha != '' && exists(rutaFicha(ficha));
+      let cuerda = tieneFicha ? get(rutaFicha(ficha)).data.get('cuerda', '') : '';
+      return hay && ficha != '' && (
+        e.get('tipoConvocatoria', '') == 'Todos'
+        || (e.get('tipoConvocatoria', '') == 'Por Cuerda' && e.get('cuerdasConvocadas', []).hasAny([cuerda]))
+        || (e.get('tipoConvocatoria', '') == 'Personalizada' && e.get('integrantesConvocadosIds', []).hasAny([ficha]))
+      );
+    }
+
     match /documentos_evento/{id} {
-      allow read, create, update, delete: if esGestion();
+      // Lectura filtrada: un Miembro recibe sólo los adjuntos de las actividades
+      // donde está citado (la regla se evalúa por documento, por eso consulta la
+      // convocatoria en vez de confiar en el que pide). Escribir es de agenda.
+      allow read: if esGestion() || (activo() && convocadoA(resource.data.get('eventoId', '')));
+      allow write: if puedeAgenda();
     }
 
     // Un dispositivo sólo registra o elimina su propio token de push. La
-    // lectura global y el envío los ejecuta Firebase Admin desde el cron,
-    // que no está sujeto a estas reglas.
+    // lectura global y el envío los ejecuta Firebase Admin desde el cron, que no
+    // está sujeto a estas reglas.
     match /dispositivos_notificaciones/{id} {
       allow create: if activo() && request.resource.data.uid == request.auth.uid;
       allow get, delete: if activo() && resource.data.uid == request.auth.uid;
@@ -317,10 +751,13 @@ service cloud.firestore {
       allow list: if false;
     }
 
-    // ──────────────────────── Avisos ────────────────────────
+    // ──────────────────────────── Avisos ────────────────────────────
 
+    // Bandeja de paso: la app deja el aviso y el servidor lo reparte en
+    // usuarios/{uid}/avisos. Las lecturas personales viven en privado/lecturas.
     match /notificaciones/{id} {
       allow read, write: if esGestion();
+      allow delete: if false;
     }
 
     // ─────────────────── Candado final: todo lo demás, negado ───────────────────

@@ -11,8 +11,11 @@ import {
   browserLocalPersistence
 } from 'firebase/auth';
 import { doc, onSnapshot, runTransaction } from 'firebase/firestore';
-import { UsuarioApp, RolUsuario } from '@/types';
-import { Permiso, tienePermiso, normalizarRol, ROLES_SUPERIORES } from '@/lib/permisos';
+import { UsuarioApp, RolUsuario, CupoFirma, Integrante } from '@/types';
+import { Permiso, normalizarRol, ROLES_SUPERIORES } from '@/lib/permisos';
+import { puedeOcuparCupo, esAtributo, esAtributoDelicado } from '@/lib/atributos';
+import { puedeIngresar, puedeGestionarIngresos, estadoVigente, mensajeEspera, puede as puedeCuenta } from '@/lib/ingresos';
+import { textoOferta } from '@/lib/traspasos';
 import { COLECCIONES, suscribirseColeccion, guardarDocumento } from '@/lib/firestoreSync';
 import { retirarNotificacionesPush } from '@/lib/notificacionesPush';
 
@@ -45,13 +48,35 @@ interface AuthContextType {
   vincularIntegrante: (uid: string, integranteId?: string) => void;
   puede: (permiso: Permiso) => boolean;
   puedeAdministrarCuenta: (uid: string) => boolean;
+  /** Si la cuenta puede firmar tal cupo (actas y solicitudes de borrado). */
+  puedeCupo: (cupo: CupoFirma) => boolean;
+  /** La sesión está a la espera de que Dirección o Secretaría la acepte. */
+  enEspera: boolean;
+  /** Mensaje y oferta de traspaso pendientes para esta cuenta. */
+  esperaMensaje: string;
+  ofertaPendiente: UsuarioApp['ofertaDirector'];
+  puedeAceptarIngresos: boolean;
+  /** Aceptar un ingreso nuevo, opcionalmente vinculándolo a una ficha. */
+  aceptarIngreso: (uid: string, opciones?: { integranteId?: string; nuevaFicha?: Omit<Integrante, 'id'> }) => void;
+  rechazarIngreso: (uid: string) => void;
+  otorgarAtribucion: (uid: string, atributo: string, opciones?: { hasta?: string; motivo?: string }) => string;
+  revocarAtribucion: (uid: string, atributo: string) => void;
+  /** Ofrecer el propio cargo de Director con ventana de respuesta. */
+  ofrecerCargo: (uidDestino: string) => Promise<string>;
+  /** Responder la oferta recibida: aceptarla o rechazarla. */
+  responderOferta: (aceptar: boolean) => Promise<string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Aplica la migración de roles antiguos (Administrador→Director,
 // Secretaria→Secretario) a cualquier usuario leído de la nube o del respaldo.
-const normalizarUsuario = (u: UsuarioApp): UsuarioApp => ({ ...u, rol: normalizarRol(u.rol) });
+const normalizarUsuario = (u: UsuarioApp): UsuarioApp => ({
+  ...u,
+  rol: normalizarRol(u.rol),
+  // Las cuentas anteriores al flujo de aprobación ya estaban aceptadas.
+  estadoIngreso: u.estadoIngreso || 'Aceptado'
+});
 
 // La primera persona que entra a la aplicación reclama la cuenta fundadora.
 // El reclamo vive en "configuracion/estado" dentro de una transacción, así dos
@@ -69,6 +94,14 @@ const reclamarFundador = async (uid: string): Promise<boolean> => {
     console.warn('[Sync] No se pudo verificar la cuenta fundadora:', error);
     return false;
   }
+};
+
+/** Qué ve una cuenta que todavía no fue aceptada, con la oferta si la hay. */
+const textoEspera = (cuenta: UsuarioApp | null): string => {
+  if (!cuenta) return '';
+  const base = mensajeEspera(estadoVigente(cuenta));
+  if (cuenta.ofertaDirector?.estado === 'Pendiente') return `${base} ${textoOferta(cuenta.ofertaDirector)}`;
+  return base;
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -162,45 +195,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Registra al usuario autenticado. La persona fundadora queda como Director
   // (verificado contra el servidor); los nuevos ingresan como Miembro.
   const registrarUsuario = useCallback(
-    (datos: { uid: string; email: string; nombre: string; fotoUrl?: string }): UsuarioApp => {
+    async (datos: { uid: string; email: string; nombre: string; fotoUrl?: string }): Promise<UsuarioApp> => {
       const ahora = new Date().toISOString();
-      const existente = usuariosRef.current.find(u => u.uid === datos.uid);
+      const sesion = { email: datos.email, nombre: datos.nombre, fotoUrl: datos.fotoUrl, ultimoAcceso: ahora };
 
-      const perfil: UsuarioApp = existente
-        ? { ...normalizarUsuario(existente), ultimoAcceso: ahora }
-        : {
-            uid: datos.uid,
-            email: datos.email,
-            nombre: datos.nombre,
-            fotoUrl: datos.fotoUrl,
-            rol: 'Miembro', // provisional hasta verificar el reclamo de fundador
-            activo: true,
-            fechaIngreso: ahora,
-            ultimoAcceso: ahora
-          };
+      // El padrón se lee por suscripción y puede llegar tarde: nunca sirve de
+      // prueba de que la cuenta existe o no. Se decide dentro de una
+      // transacción, leyendo el documento real, para que un ingreso a media
+      // sincronización no borre el cargo ni el estado de alta de alguien ya
+      // aceptado (eso dejaría afuera a media directiva con un solo clic).
+      const definitivo = await runTransaction(db, async transaccion => {
+        const referencia = doc(db, 'usuarios', datos.uid);
+        const snapshot = await transaccion.get(referencia);
+        if (snapshot.exists()) {
+          const siguiente = { ...normalizarUsuario(snapshot.data() as UsuarioApp), ...sesion };
+          transaccion.update(referencia, siguiente);
+          return siguiente;
+        }
+
+        // Cuenta nueva: el cargo de Dirección sólo se lo lleva quien reclamó la
+        // condición de fundadora, y esa condición se vuelve a comprobar acá
+        // dentro, leyendo configuracion/estado en la misma transacción.
+        await reclamarFundador(datos.uid);
+        const estado = await transaccion.get(doc(db, 'configuracion', 'estado'));
+        const esFundadora = estado.exists() && estado.data()?.fundador === datos.uid;
+        const creado: UsuarioApp = {
+          uid: datos.uid,
+          ...sesion,
+          rol: esFundadora ? 'Director' : 'Miembro',
+          activo: true,
+          // Toda cuenta nueva queda a la espera: Dirección o Secretaría la
+          // acepta, la rechaza, o el pedido caduca a los 30 días.
+          estadoIngreso: esFundadora ? 'Aceptado' : 'Pendiente',
+          fechaIngreso: ahora
+        };
+        transaccion.set(referencia, creado);
+        return creado;
+      });
 
       setUsuarios(prev =>
-        prev.some(u => u.uid === perfil.uid)
-          ? prev.map(u => (u.uid === perfil.uid ? perfil : u))
-          : [...prev, perfil]
+        prev.some(u => u.uid === definitivo.uid)
+          ? prev.map(u => (u.uid === definitivo.uid ? definitivo : u))
+          : [...prev, definitivo]
       );
-
-      if (perfil.uid === UID_MODO_LOCAL) return perfil;
-
-      if (existente) {
-        // Escribe el rol ya normalizado: migra los valores antiguos al vuelo.
-        void guardarDocumento(COLECCIONES.usuarios, perfil.uid, perfil);
-      } else {
-        // Cuenta nueva: primero el reclamo transaccional de fundador, luego el
-        // registro (las reglas exigen ese orden para otorgar el rol Director).
-        void reclamarFundador(perfil.uid).then(esFundador => {
-          const definitivo: UsuarioApp = { ...perfil, rol: esFundador ? 'Director' : 'Miembro' };
-          setUsuarios(prev => prev.map(u => (u.uid === definitivo.uid ? definitivo : u)));
-          void guardarDocumento(COLECCIONES.usuarios, definitivo.uid, definitivo);
-        });
-      }
-
-      return perfil;
+      return definitivo;
     },
     []
   );
@@ -225,16 +263,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setCargando(false);
               return;
             }
-            const perfil = registrarUsuario({
+            void registrarUsuario({
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
               nombre: firebaseUser.displayName || firebaseUser.email || 'Usuario',
               fotoUrl: firebaseUser.photoURL || undefined
-            });
-            setUsuario(perfil);
-            setModoLocal(false);
-            localStorage.removeItem(CLAVE_SESION_LOCAL);
-            setCargando(false);
+            })
+              .then(perfil => {
+                setUsuario(perfil);
+                setModoLocal(false);
+                localStorage.removeItem(CLAVE_SESION_LOCAL);
+              })
+              .catch(() => {
+                // Sin el documento de usuario no hay sesión útil: se avisa en
+                // lugar de dejar la app a medias con un perfil inventado.
+                setAuthDisponible(false);
+                setError('No se pudo registrar tu cuenta en el ministerio. Intenta de nuevo en un momento.');
+              })
+              .finally(() => setCargando(false));
           },
           err => {
             setAuthDisponible(false);
@@ -372,19 +418,154 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const puedeAceptarIngresos =
+    !!usuario && usuario.activo && puedeGestionarIngresos(usuario.rol, usuario.atribuciones);
+
+  /**
+   * Una ficha, una cuenta. Si la ficha ya estaba vinculada a otra cuenta, el
+   * vínculo se traspasa y queda escrito en el registro de cada una: así se
+   * resuelve el caso de quien cambia de correo sin borrar la historia.
+   */
   const vincularIntegrante = (uid: string, integranteId?: string) => {
-    if (!puedeAdministrarCuenta(uid)) return;
+    if (!puedeAdministrarCuenta(uid) && !puedeAceptarIngresos) return;
     const actual = usuariosRef.current.find(u => u.uid === uid);
-    setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, integranteId } : u)));
-    if (actual) {
-      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, integranteId });
+    const anterior = integranteId
+      ? usuariosRef.current.find(u => u.uid !== uid && u.integranteId === integranteId)
+      : undefined;
+    setUsuarios(prev =>
+      prev.map(u => {
+        if (u.uid === uid) return { ...u, integranteId };
+        if (anterior && u.uid === anterior.uid) return { ...u, integranteId: undefined };
+        return u;
+      })
+    );
+    if (actual) void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, integranteId });
+    if (anterior) void guardarDocumento(COLECCIONES.usuarios, anterior.uid, { ...anterior, integranteId: undefined });
+  };
+
+  // ─────────────────── Ingresos nuevos: aceptar o rechazar ───────────────────
+  const marcarIngreso = (uid: string, cambios: Partial<UsuarioApp>) => {
+    if (!puedeAceptarIngresos && rolEfectivo() !== 'Desarrollador') return;
+    const actual = usuariosRef.current.find(u => u.uid === uid);
+    if (!actual) return;
+    const siguiente = { ...actual, ...cambios };
+    setUsuarios(prev => prev.map(u => (u.uid === uid ? siguiente : u)));
+    void guardarDocumento(COLECCIONES.usuarios, uid, siguiente);
+  };
+
+  /**
+   * Aceptar a quien llega: se deja constancia de quién aceptó y se resuelve su
+   * ficha. O se vincula a una existente (la que Secretaría creó a mano) o se crea
+   * una con los datos de la cuenta, para que nadie quede «sin ficha»: sin ficha
+   * no hay estadísticas ni asistencia.
+   */
+  const aceptarIngreso = (uid: string, opciones: { integranteId?: string; nuevaFicha?: Omit<Integrante, 'id'> } = {}) => {
+    let integranteId = opciones.integranteId;
+    if (!integranteId && opciones.nuevaFicha && usuario) {
+      integranteId = `int-${Date.now()}`;
+      const autor = { uid: usuario.uid, nombre: usuario.nombre, rol: usuario.rol, fecha: new Date().toISOString() };
+      void guardarDocumento(COLECCIONES.integrantes, integranteId, {
+        ...opciones.nuevaFicha,
+        id: integranteId,
+        creadoPor: autor,
+        editadoPor: autor
+      });
+    }
+    marcarIngreso(uid, {
+      estadoIngreso: 'Aceptado',
+      rol: 'Miembro',
+      ...(integranteId ? { integranteId } : {}),
+      ...(usuario ? { aceptadoPor: { uid: usuario.uid, nombre: usuario.nombre, rol: usuario.rol, fecha: new Date().toISOString() } } : {})
+    });
+  };
+
+  const rechazarIngreso = (uid: string) => {
+    marcarIngreso(uid, { estadoIngreso: 'Rechazado', activo: false });
+  };
+
+  // ─────────────────────── Atribuciones sobre la cuenta ───────────────────────
+  // Las delicadas (cupos de firma y borrados) sólo las concede quien opera con
+  // permisos de Desarrollador: el fundador o un Desarrollador. Un Director
+  // puede activar las simples, que son de registro diario.
+  const puedeConcederAtribuciones = (delicada: boolean): boolean => {
+    if (!delicada) return puede('gestionar_usuarios');
+    return rolEfectivo() === 'Desarrollador';
+  };
+
+  const otorgarAtribucion = (uid: string, atributo: string, opciones: { hasta?: string; motivo?: string } = {}): string => {
+    if (!esAtributo(atributo)) return 'Esa atribución no existe.';
+    const actual = usuariosRef.current.find(u => u.uid === uid);
+    if (!actual) return 'La cuenta ya no está disponible.';
+    if (!puedeConcederAtribuciones(esAtributoDelicado(atributo))) return 'Tu cargo no puede conceder esa atribución.';
+    const vigentes = (actual.atribuciones || []).filter(a => a.atributo !== atributo);
+    const siguiente: UsuarioApp = {
+      ...actual,
+      atribuciones: [
+        ...vigentes,
+        {
+          atributo,
+          otorgadoPor: { uid: usuario?.uid || '', nombre: usuario?.nombre || '', rol: usuario?.rol || '', fecha: new Date().toISOString() },
+          ...(opciones.motivo ? { motivo: opciones.motivo } : {}),
+          ...(opciones.hasta ? { hasta: opciones.hasta } : {})
+        }
+      ]
+    };
+    setUsuarios(prev => prev.map(u => (u.uid === uid ? siguiente : u)));
+    void guardarDocumento(COLECCIONES.usuarios, uid, siguiente);
+    return '';
+  };
+
+  const revocarAtribucion = (uid: string, atributo: string): string => {
+    const actual = usuariosRef.current.find(u => u.uid === uid);
+    if (!actual) return 'La cuenta ya no está disponible.';
+    if (!puedeConcederAtribuciones(esAtributoDelicado(atributo))) return 'Tu cargo no puede retirar esa atribución.';
+    const siguiente: UsuarioApp = {
+      ...actual,
+      atribuciones: (actual.atribuciones || []).filter(a => a.atributo !== atributo)
+    };
+    setUsuarios(prev => prev.map(u => (u.uid === uid ? siguiente : u)));
+    void guardarDocumento(COLECCIONES.usuarios, uid, siguiente);
+    return '';
+  };
+
+  // ─────────────────── Traspaso del cargo de Director (24 h) ───────────────────
+  const ofrecerCargo = async (uidDestino: string): Promise<string> => {
+    try {
+      const respuesta = await fetch('/api/cargos', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accion: 'ofrecer', destinoUid: uidDestino })
+      });
+      const datos = (await respuesta.json()) as { error?: string; mensaje?: string };
+      return datos.error || datos.mensaje || 'Oferta enviada.';
+    } catch {
+      return 'No se pudo enviar la oferta. Revisa la conexión.';
     }
   };
 
-  const puede = (permiso: Permiso) => {
-    if (!usuario || !usuario.activo) return false;
-    return tienePermiso(usuario.rol, permiso);
+  const responderOferta = async (aceptar: boolean): Promise<string> => {
+    try {
+      const respuesta = await fetch('/api/cargos', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accion: aceptar ? 'aceptar' : 'rechazar' })
+      });
+      const datos = (await respuesta.json()) as { error?: string; mensaje?: string };
+      return datos.error || datos.mensaje || '';
+    } catch {
+      return 'No se pudo responder la oferta. Revisa la conexión.';
+    }
   };
+
+  const puede = (permiso: Permiso) =>
+    modoLocal || puedeCuenta(usuario, permiso);
+
+  const puedeCupo = (cupo: CupoFirma): boolean =>
+    !!usuario && usuario.activo && puedeIngresar(usuario) && puedeOcuparCupo(usuario.rol, cupo, usuario.atribuciones);
+
+  const enEspera = !!usuario && !modoLocal && !puedeIngresar(usuario);
+  const esperaMensaje = enEspera ? textoEspera(usuario) : '';
+  const ofertaPendiente = usuario?.ofertaDirector;
 
   return (
     <AuthContext.Provider
@@ -398,6 +579,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         esFundador,
         esSuperAdmin,
         rolEfectivo,
+        puedeCupo,
+        enEspera,
+        esperaMensaje,
+        ofertaPendiente,
+        puedeAceptarIngresos,
+        aceptarIngreso,
+        rechazarIngreso,
+        otorgarAtribucion,
+        revocarAtribucion,
+        ofrecerCargo,
+        responderOferta,
         iniciarSesionGoogle,
         cerrarSesion,
         entrarModoLocal,

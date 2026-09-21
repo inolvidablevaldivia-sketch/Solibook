@@ -29,13 +29,22 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
   const { ajustes } = useAjustes();
   const noLeidas = notificaciones.filter(n => !n.leido).length;
 
+  // Cada solapa aparece sólo si el cargo (o la atribución sumada) la habilita.
+  // Así un Miembro no ve «Asistencia» para chocar después con un acceso negado.
   const navegacion = [
     { id: 'inicio', label: 'Inicio', icon: Home },
     { id: 'agenda', label: 'Agenda', icon: Calendar },
     { id: 'asistencia', label: 'Asistencia', icon: CheckSquare },
     { id: 'libros', label: 'Libros', icon: BookOpen },
     { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard }
-  ];
+  ].filter(item =>
+    item.id === 'inicio' ||
+    (item.id === 'agenda' && puede('ver_agenda')) ||
+    (item.id === 'asistencia' && (puede('pasar_lista') || puede('finalizar_lista'))) ||
+    (item.id === 'libros' &&
+      (puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos'))) ||
+    (item.id === 'dashboard' && puede('ver_metricas'))
+  );
 
   const iniciales = (usuario?.nombre || 'SD')
     .split(' ')
@@ -79,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
             );
           })}
 
-          {puede('gestionar_usuarios') && (
+          {(puede('gestionar_usuarios') || puede('ver_cuentas')) && (
             <button
               onClick={() => setVistaActual('usuarios')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
@@ -89,7 +98,7 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
               }`}
             >
               <Building2 className="w-3.5 h-3.5" />
-              Usuarios
+              {puede('gestionar_usuarios') ? 'Usuarios' : 'Cuentas'}
             </button>
           )}
         </nav>

@@ -1,12 +1,14 @@
 'use client';
 
 import React from 'react';
+import { useAuth } from '@/context/AuthContext';
 import {
   Home,
   Calendar,
   CheckSquare,
   BookOpen,
   LayoutDashboard,
+  Building2,
   LucideIcon
 } from 'lucide-react';
 
@@ -22,13 +24,26 @@ interface TabDefinicion {
 }
 
 export const BottomNav: React.FC<BottomNavProps> = ({ vistaActual, setVistaActual }) => {
-  const tabs: TabDefinicion[] = [
+  // Mismo filtro que la cabecera de escritorio: nadie ve una solapa que no puede
+  // usar. «Cuentas» aparece para quien puede gestionlas y también para quien sólo
+  // puede mirarlas (el Vocal).
+  const { puede } = useAuth();
+  const tabs = [
     { id: 'inicio', label: 'Inicio', icon: Home },
     { id: 'agenda', label: 'Agenda', icon: Calendar },
     { id: 'asistencia', label: 'Asistencia', icon: CheckSquare },
     { id: 'libros', label: 'Libros', icon: BookOpen },
-    { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard }
-  ];
+    { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard },
+    { id: 'usuarios', label: 'Cuentas', icon: Building2 }
+  ].filter(tab =>
+    tab.id === 'inicio' ||
+    (tab.id === 'agenda' && puede('ver_agenda')) ||
+    (tab.id === 'asistencia' && (puede('pasar_lista') || puede('finalizar_lista'))) ||
+    (tab.id === 'libros' &&
+      (puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos'))) ||
+    (tab.id === 'dashboard' && puede('ver_metricas')) ||
+    (tab.id === 'usuarios' && (puede('gestionar_usuarios') || puede('ver_cuentas')))
+  ) as TabDefinicion[];
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/80 shadow-[0_-2px_10px_rgba(0,0,0,0.04)] px-2 py-1.5 lg:hidden">
