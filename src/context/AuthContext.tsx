@@ -195,52 +195,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Registra al usuario autenticado. La persona fundadora queda como Director
   // (verificado contra el servidor); los nuevos ingresan como Miembro.
   const registrarUsuario = useCallback(
-    (datos: { uid: string; email: string; nombre: string; fotoUrl?: string }): UsuarioApp => {
+    async (datos: { uid: string; email: string; nombre: string; fotoUrl?: string }): Promise<UsuarioApp> => {
       const ahora = new Date().toISOString();
-      const existente = usuariosRef.current.find(u => u.uid === datos.uid);
+      const sesion = { email: datos.email, nombre: datos.nombre, fotoUrl: datos.fotoUrl, ultimoAcceso: ahora };
 
-      const perfil: UsuarioApp = existente
-        ? { ...normalizarUsuario(existente), ultimoAcceso: ahora }
-        : {
-            uid: datos.uid,
-            email: datos.email,
-            nombre: datos.nombre,
-            fotoUrl: datos.fotoUrl,
-            rol: 'Miembro', // provisional hasta verificar el reclamo de fundador
-            activo: true,
-            // Toda cuenta nueva queda a la espera: Dirección o Secretaría la
-            // acepta, la rechaza, o el pedido caduca a los 30 días.
-            estadoIngreso: 'Pendiente',
-            fechaIngreso: ahora,
-            ultimoAcceso: ahora
-          };
+      // El padrón se lee por suscripción y puede llegar tarde: nunca sirve de
+      // prueba de que la cuenta existe o no. Se decide dentro de una
+      // transacción, leyendo el documento real, para que un ingreso a media
+      // sincronización no borre el cargo ni el estado de alta de alguien ya
+      // aceptado (eso dejaría afuera a media directiva con un solo clic).
+      const definitivo = await runTransaction(db, async transaccion => {
+        const referencia = doc(db, 'usuarios', datos.uid);
+        const snapshot = await transaccion.get(referencia);
+        if (snapshot.exists()) {
+          const siguiente = { ...normalizarUsuario(snapshot.data() as UsuarioApp), ...sesion };
+          transaccion.update(referencia, siguiente);
+          return siguiente;
+        }
+
+        // Cuenta nueva: el cargo de Dirección sólo se lo lleva quien reclamó la
+        // condición de fundadora, y esa condición se vuelve a comprobar acá
+        // dentro, leyendo configuracion/estado en la misma transacción.
+        await reclamarFundador(datos.uid);
+        const estado = await transaccion.get(doc(db, 'configuracion', 'estado'));
+        const esFundadora = estado.exists() && estado.data()?.fundador === datos.uid;
+        const creado: UsuarioApp = {
+          uid: datos.uid,
+          ...sesion,
+          rol: esFundadora ? 'Director' : 'Miembro',
+          activo: true,
+          // Toda cuenta nueva queda a la espera: Dirección o Secretaría la
+          // acepta, la rechaza, o el pedido caduca a los 30 días.
+          estadoIngreso: esFundadora ? 'Aceptado' : 'Pendiente',
+          fechaIngreso: ahora
+        };
+        transaccion.set(referencia, creado);
+        return creado;
+      });
 
       setUsuarios(prev =>
-        prev.some(u => u.uid === perfil.uid)
-          ? prev.map(u => (u.uid === perfil.uid ? perfil : u))
-          : [...prev, perfil]
+        prev.some(u => u.uid === definitivo.uid)
+          ? prev.map(u => (u.uid === definitivo.uid ? definitivo : u))
+          : [...prev, definitivo]
       );
-
-      if (perfil.uid === UID_MODO_LOCAL) return perfil;
-
-      if (existente) {
-        // Escribe el rol ya normalizado: migra los valores antiguos al vuelo.
-        void guardarDocumento(COLECCIONES.usuarios, perfil.uid, perfil);
-      } else {
-        // Cuenta nueva: primero el reclamo transaccional de fundador, luego el
-        // registro (las reglas exigen ese orden para otorgar el rol Director).
-        void reclamarFundador(perfil.uid).then(esFundador => {
-          const definitivo: UsuarioApp = {
-            ...perfil,
-            rol: esFundador ? 'Director' : 'Miembro',
-            estadoIngreso: esFundador ? 'Aceptado' : 'Pendiente'
-          };
-          setUsuarios(prev => prev.map(u => (u.uid === definitivo.uid ? definitivo : u)));
-          void guardarDocumento(COLECCIONES.usuarios, definitivo.uid, definitivo);
-        });
-      }
-
-      return perfil;
+      return definitivo;
     },
     []
   );
@@ -265,16 +263,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setCargando(false);
               return;
             }
-            const perfil = registrarUsuario({
+            void registrarUsuario({
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
               nombre: firebaseUser.displayName || firebaseUser.email || 'Usuario',
               fotoUrl: firebaseUser.photoURL || undefined
-            });
-            setUsuario(perfil);
-            setModoLocal(false);
-            localStorage.removeItem(CLAVE_SESION_LOCAL);
-            setCargando(false);
+            })
+              .then(perfil => {
+                setUsuario(perfil);
+                setModoLocal(false);
+                localStorage.removeItem(CLAVE_SESION_LOCAL);
+              })
+              .catch(() => {
+                // Sin el documento de usuario no hay sesión útil: se avisa en
+                // lugar de dejar la app a medias con un perfil inventado.
+                setAuthDisponible(false);
+                setError('No se pudo registrar tu cuenta en el ministerio. Intenta de nuevo en un momento.');
+              })
+              .finally(() => setCargando(false));
           },
           err => {
             setAuthDisponible(false);

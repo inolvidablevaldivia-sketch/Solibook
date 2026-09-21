@@ -5,7 +5,7 @@ import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { Carta, EstadoCarta } from '@/types';
-import { etiquetaCorta, etiquetaDetalle, fechaLegible, normalizarAcuses, yaAcusado } from '@/lib/autorias';
+import { etiquetaCorta, etiquetaDetalle, normalizarAcuses, yaAcusado } from '@/lib/autorias';
 import {
   Mail,
   Plus,

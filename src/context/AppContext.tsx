@@ -33,7 +33,7 @@ import { obtenerProximoCumpleanos } from '@/lib/cumpleanos';
 import { ColeccionConDemo, filtrarDatosDemo } from '@/lib/datosDemo';
 import { firmar, agregarAcuse, crearAcuse } from '@/lib/autorias';
 import { aplicarEdicion, firmarCupo, solicitarApertura, autorizarApertura } from '@/lib/actasProtocolo';
-import type { Autoria, CupoFirma } from '@/types';
+import type { Autoria, CupoFirma, FirmaActa } from '@/types';
 
 interface AppContextType {
   // Integrantes
@@ -958,7 +958,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const autor = quien();
         // El texto corregido vuelve a quedar sin firmas: los tres cupos tienen
         // que volver a firmar sobre lo que ahora dice el acta.
-        tx.set(ref, { ...aplicarEdicion(acta, temas, acuerdos), ...(autor ? { editadaPor: autor } : {}) });
+        const autorizacion = [acta.firmas?.Director, acta.firmas?.Secretario].filter(Boolean);
+        tx.set(ref, {
+          ...aplicarEdicion(acta, temas, acuerdos, autorizacion as FirmaActa[]),
+          ...(autor ? { editadaPor: autor } : {})
+        });
       });
       return true;
     } catch { alert('No se pudo guardar. Revisa las dos firmas, los cargos vigentes y la conexión. Tus cambios siguen en el formulario.'); return false; }

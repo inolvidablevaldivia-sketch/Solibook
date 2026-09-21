@@ -300,9 +300,18 @@ export interface Acta {
    * obligatorios; la firma de Vocalía se suma si el Vocal quiere constar.
    */
   firmas?: Partial<Record<CupoFirma, FirmaActa>>;
+  /**
+   * Las dos firmas (Dirección y Secretaría) que autorizaron abrir el acta para
+   * corregirla. Se conservan como constancia al limpiar las firmas de cierre.
+   */
+  edicionAutorizadaPor?: FirmaActa[];
   // --- Campos espejo del modelo anterior, que leen las reglas de Firestore ---
-  aprobadoPresidente: boolean;
-  aprobadoSecretaria: boolean;
+  /**
+   * Espejo de `firmas` para el modelo anterior (las reglas y algunas vistas lo
+   * leen). Son derivados: nunca se escriben a mano, siempre vienen del acta.
+   */
+  aprobadoPresidente?: boolean;
+  aprobadoSecretaria?: boolean;
   aprobadoTesoreria?: boolean;
   aprobadoVocalia?: boolean;
   firmaEdicionDirectorUid?: string;

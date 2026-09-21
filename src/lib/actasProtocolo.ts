@@ -78,7 +78,10 @@ export function firmarCupo(acta: Acta, cupo: CupoFirma, firma: FirmaActa): Acta 
 
 /** Escribe y limpia los campos espejo a partir del mapa de firmas. */
 function espiarCamposLegados(acta: Acta): Acta {
-  const firmas = acta.firmas || {};
+  // Un acta anterior al mapa de firmas se reconstruye desde sus campos espejo,
+  // así una apertura firmada antes no se queda sin constancia. `firmas: {}`
+  // explícito sí manda: es la limpieza que se hace al abrir o al corregir.
+  const firmas = acta.firmas ? acta.firmas : firmasDelActa(acta);
   const espejo = acta as unknown as Record<string, unknown>;
   for (const [cupo, campos] of Object.entries(CAMPO_LEGADO)) {
     espejo[campos.aprobado] = !!firmas[cupo as CupoFirma]?.uid;
@@ -131,7 +134,12 @@ export function puedeEditarTrasApertura(acta: Acta): boolean {
  * Guardar una edición autorizada deja el acta en borrador con las firmas
  * limpias: los tres cupos vuelven a firmar sobre el texto corregido.
  */
-export function aplicarEdicion(acta: Acta, temasTratados: string, acuerdos: string): Acta {
+export function aplicarEdicion(
+  acta: Acta,
+  temasTratados: string,
+  acuerdos: string,
+  autorizacion?: FirmaActa[]
+): Acta {
   const respaldo = {
     temasTratados: acta.temasTratados,
     acuerdos: acta.acuerdos,
@@ -143,6 +151,10 @@ export function aplicarEdicion(acta: Acta, temasTratados: string, acuerdos: stri
     acuerdos,
     version: (acta.version || 0) + 1,
     backupAnterior: respaldo,
-    estado: 'Borrador'
+    estado: 'Borrador',
+    // Las firmas de cierre se limpian: nadie queda amarrado a un texto que no
+    // leyó. La autorización que permitió editar queda anotada aparte.
+    firmas: {},
+    ...(autorizacion && autorizacion.length ? { edicionAutorizadaPor: autorizacion } : {})
   });
 }
