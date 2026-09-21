@@ -1,11 +1,11 @@
 'use client';
 
 import React from 'react';
+import { useAjustes } from '@/context/AjustesContext';
 import { SoliDeoLogo } from './SoliDeoLogo';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import {
-  RefreshCw,
   Bell,
   Shield,
   Calendar,
@@ -13,7 +13,6 @@ import {
   BookOpen,
   Home,
   LayoutDashboard,
-  Users,
   Building2
 } from 'lucide-react';
 
@@ -24,9 +23,10 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActual, setVistaActual }) => {
-  const { forzarActualizacionApp, notificaciones } = useApp();
-  const { usuario, puede, cerrarSesion } = useAuth();
+  const { notificaciones } = useApp();
+  const { usuario, puede } = useAuth();
 
+  const { ajustes } = useAjustes();
   const noLeidas = notificaciones.filter(n => !n.leido).length;
 
   const navegacion = [
@@ -96,23 +96,6 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
 
         {/* Acciones Superiores */}
         <div className="flex items-center gap-2">
-          {/* Botón PWA: Forzar versión fresca / Limpiar Caché */}
-          <button
-            onClick={() => {
-              if (
-                confirm(
-                  '¿Deseas refrescar la aplicación y limpiar la memoria caché para cargar la última versión fresca?'
-                )
-              ) {
-                forzarActualizacionApp();
-              }
-            }}
-            title="Refrescar aplicación y limpiar caché PWA"
-            className="p-2 text-slate-500 hover:text-[#0099DD] hover:bg-sky-50 rounded-lg transition-colors border border-slate-200/60"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-
           {/* Campanita de Notificaciones con Badge */}
           <button
             onClick={onAbrirNotificaciones}
@@ -128,7 +111,7 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
           </button>
 
           {/* Usuario autenticado */}
-          <div className="flex items-center gap-2 pl-2 pr-2.5 py-1 bg-slate-50 border border-slate-200/80 rounded-xl select-none">
+          <button onClick={() => setVistaActual('ajustes')} title="Mi perfil y ajustes" aria-label="Mi perfil y ajustes" className="flex items-center gap-2 pl-2 pr-2.5 py-1 bg-slate-50 border border-slate-200/80 rounded-xl select-none">
             {usuario?.fotoUrl ? (
               <img
                 src={usuario.fotoUrl}
@@ -146,17 +129,10 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
               </span>
               <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
                 <Shield className="w-2.5 h-2.5 text-emerald-500" />
-                {usuario?.nombre || 'No autenticado'}
+                {ajustes.nombrePrivado || usuario?.nombre || 'No autenticado'}
               </span>
             </div>
-            <button
-              onClick={cerrarSesion}
-              title="Cerrar sesión"
-              className="ml-1 text-[10px] font-bold text-slate-400 hover:text-[#8B1E2B] transition-colors"
-            >
-              Salir
-            </button>
-          </div>
+          </button>
         </div>
       </div>
     </header>

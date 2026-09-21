@@ -22,14 +22,15 @@ import {
   guardarDocumento,
   guardarDocumentos,
   eliminarDocumento as eliminarDocumentoFirestore,
-  eliminarDocumentos as eliminarDocumentosFirestore,
-  bloquearSiembraDe
+  eliminarDocumentos as eliminarDocumentosFirestore
 } from '@/lib/firestoreSync';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { collection, onSnapshot, query, where, doc, setDoc, runTransaction } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
+import { useEliminaciones } from '@/context/EliminacionesContext';
+import { useAjustes } from '@/context/AjustesContext';
 import { useAuth } from '@/context/AuthContext';
 import { obtenerProximoCumpleanos } from '@/lib/cumpleanos';
-import { ColeccionConDemo, filtrarDatosDemo, idsDemoDe } from '@/lib/datosDemo';
+import { ColeccionConDemo, filtrarDatosDemo } from '@/lib/datosDemo';
 
 interface AppContextType {
   // Integrantes
@@ -67,7 +68,7 @@ interface AppContextType {
   agregarActa: (nueva: Omit<Acta, 'id'>) => void;
   solicitarEdicionActa: (actaId: string) => void;
   aprobarEdicionActa: (actaId: string, rol: 'Presidente' | 'Secretaria') => void;
-  guardarEdicionActa: (actaId: string, temas: string, acuerdos: string) => void;
+  guardarEdicionActa: (actaId: string, temas: string, acuerdos: string) => Promise<boolean>;
   deshacerEdicionActa: (actaId: string) => void;
 
   // Justificaciones
@@ -93,11 +94,9 @@ interface AppContextType {
   // Utilidades PWA
   forzarActualizacionApp: () => void;
   usuarioActivo: { nombre: string; rol: string; iniciales: string };
-  setUsuarioActivo: (u: { nombre: string; rol: string; iniciales: string }) => void;
 
   // Mantenimiento: retire de la nube y del dispositivo los registros de
   // demostración de las primeras versiones. Devuelve cuántos eliminó.
-  limpiarDatosDemo: () => Promise<number>;
   cantidadDatosDemoEnUso: number;
 }
 
@@ -258,17 +257,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Identidad de sincronización: al iniciar o cerrar sesión se rearman las
   // suscripciones a Firestore (las reglas pueden exigir usuario autenticado).
   const { usuario, modoLocal, puede } = useAuth();
+  const { solicitar: solicitarEliminacion, advertirBloqueo } = useEliminaciones();
+  const { leidas, marcarLeida, avisos } = useAjustes();
   const claveSync = modoLocal ? 'modo-local' : (usuario?.uid ?? 'sin-sesion');
   // Solo los roles de gestión publican cambios en la configuración compartida
   // (tipos de actividad). Se guarda como dato estable para no reabrir las
   // suscripciones en cada render.
   const puedeConfigurarEventos = puede('crear_evento');
 
-  const [usuarioActivo, setUsuarioActivo] = useState({
-    nombre: 'Pastoral & Secretaría General',
-    rol: 'Administración',
-    iniciales: 'SG'
-  });
+  const usuarioActivo = {
+    nombre: usuario?.nombre || 'Sin sesión',
+    rol: usuario?.rol || '',
+    iniciales: (usuario?.nombre || 'SD').split(' ').filter(Boolean).slice(0, 2).map(p => p[0].toUpperCase()).join('')
+  };
 
   // Espejos síncronos del estado para leer el valor más reciente dentro de
   // las mutaciones (y calcular qué documentos escribir en Firestore).
@@ -348,7 +349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // estado local; si la nube está vacía se migran los datos locales (siembra
   // única, protegida por transacción en "configuracion/semillas").
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded || modoLocal || !usuario?.uid) return;
 
     // Con sesión real, un "permiso denegado" significa que el rol no tiene
     // acceso a esa colección: se muestra vacía en lugar del contenido local
@@ -412,13 +413,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         undefined,
         alSerRestringida(() => setActas([]))
       ),
-      suscribirseColeccion<Justificacion>(
-        COLECCIONES.justificaciones,
-        items => setJustificaciones(items),
-        () => justificacionesRef.current,
-        undefined,
-        alSerRestringida(() => setJustificaciones([]))
-      ),
+      ...(sesionReal && usuario?.rol === 'Miembro'
+        ? [usuario.integranteId ? onSnapshot(
+            query(collection(db, COLECCIONES.justificaciones), where('integranteId', '==', usuario.integranteId)),
+            snap => setJustificaciones(snap.docs.map(d => ({ ...d.data(), id: d.id } as Justificacion))),
+            () => setJustificaciones([])
+          ) : (() => { setJustificaciones([]); return () => {}; })()]
+        : [suscribirseColeccion<Justificacion>(
+            COLECCIONES.justificaciones,
+            items => setJustificaciones(items),
+            () => justificacionesRef.current,
+            undefined,
+            alSerRestringida(() => setJustificaciones([]))
+          )]),
       suscribirseColeccion<NotificacionItem>(
         COLECCIONES.notificaciones,
         items => setNotificaciones(items),
@@ -559,14 +566,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const actualizarIntegrante = (id: string, datos: Partial<Integrante>) => {
+    if (advertirBloqueo('integrantes', id)) return;
     const actual = integrantesRef.current.find(item => item.id === id);
     setIntegrantes(prev => prev.map(item => item.id === id ? { ...item, ...datos } : item));
     if (actual) void guardarDocumento(COLECCIONES.integrantes, id, { ...actual, ...datos });
   };
 
   const eliminarIntegrante = (id: string) => {
-    setIntegrantes(prev => prev.filter(item => item.id !== id));
-    void eliminarDocumentoFirestore(COLECCIONES.integrantes, id);
+    void solicitarEliminacion('integrantes', id, integrantesRef.current.find(i => i.id === id)?.nombreCompleto || id);
   };
 
   // Funciones de Eventos
@@ -722,23 +729,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Funciones de Cartas
   const agregarCarta = (nueva: Omit<Carta, 'id'>) => {
-    const id = `car-${Date.now()}`;
+    const id = `car-${crypto.randomUUID()}`;
     const notificacion: NotificacionItem = {
-      id: `notif-${Date.now()}`,
+      id: `notif-${crypto.randomUUID()}`,
       tipo: 'Carta',
       titulo: 'Nueva Correspondencia Registrada',
       mensaje: `${nueva.tipoFlujo === 'Recibida' ? 'De: ' : 'Para: '} ${nueva.remitenteDestinatario} (${nueva.folio})`,
-      fecha: 'Hace un momento',
+      fecha: new Date().toISOString(),
       leido: false,
       accionId: id
     };
     setCartas(prev => [{ ...nueva, id }, ...prev]);
     setNotificaciones(prev => [notificacion, ...prev]);
     void guardarDocumento(COLECCIONES.cartas, id, { ...nueva, id });
-    void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion);
+    void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion).then(() => intentarAvisoPush(notificacion.id));
   };
 
   const marcarCartaLeida = (cartaId: string, usuarioInitials: string) => {
+    if (advertirBloqueo('cartas', cartaId)) return;
     const cartaActual = cartasRef.current.find(c => c.id === cartaId);
     setCartas(prev => prev.map(c => {
       if (c.id === cartaId && !c.vistoPor.includes(usuarioInitials)) {
@@ -755,6 +763,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const actualizarEstadoCarta = (cartaId: string, estado: Carta['estado']) => {
+    if (advertirBloqueo('cartas', cartaId)) return;
     const cartaActual = cartasRef.current.find(c => c.id === cartaId);
     setCartas(prev => prev.map(c => c.id === cartaId ? { ...c, estado } : c));
     if (cartaActual) void guardarDocumento(COLECCIONES.cartas, cartaId, { ...cartaActual, estado });
@@ -768,13 +777,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const solicitarEdicionActa = (actaId: string) => {
+    if (advertirBloqueo('actas', actaId)) return;
     const actaActual = actasRef.current.find(a => a.id === actaId);
     const notificacion: NotificacionItem = {
-      id: `notif-${Date.now()}`,
+      id: `notif-${crypto.randomUUID()}`,
       tipo: 'Acta',
       titulo: 'Solicitud de Edición de Acta',
       mensaje: 'Se ha solicitado autorización conjunta para modificar un acta cerrada.',
-      fecha: 'Ahora',
+      fecha: new Date().toISOString(),
       leido: false,
       accionId: actaId
     };
@@ -782,7 +792,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...a,
       estado: 'En_Solicitud_Edicion',
       aprobadoPresidente: false,
-      aprobadoSecretaria: false
+      aprobadoSecretaria: false,
+      firmaEdicionDirectorUid: '',
+      firmaEdicionSecretarioUid: ''
     } : a));
     setNotificaciones(prev => [notificacion, ...prev]);
     if (actaActual) {
@@ -790,120 +802,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...actaActual,
         estado: 'En_Solicitud_Edicion',
         aprobadoPresidente: false,
-        aprobadoSecretaria: false
+        aprobadoSecretaria: false,
+      firmaEdicionDirectorUid: '',
+      firmaEdicionSecretarioUid: ''
       });
     }
-    void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion);
+    void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion).then(() => intentarAvisoPush(notificacion.id));
   };
 
-  const aprobarEdicionActa = (actaId: string, rol: 'Presidente' | 'Secretaria') => {
-    const actaActual = actasRef.current.find(a => a.id === actaId);
-    setActas(prev => prev.map(a => {
-      if (a.id === actaId) {
-        const pres = rol === 'Presidente' ? true : a.aprobadoPresidente;
-        const sec = rol === 'Secretaria' ? true : a.aprobadoSecretaria;
-        const yaAmbos = pres && sec;
-        return {
-          ...a,
-          aprobadoPresidente: pres,
-          aprobadoSecretaria: sec,
-          estado: yaAmbos ? 'Borrador' : 'En_Solicitud_Edicion'
-        };
-      }
-      return a;
-    }));
-    if (actaActual) {
-      const pres = rol === 'Presidente' ? true : actaActual.aprobadoPresidente;
-      const sec = rol === 'Secretaria' ? true : actaActual.aprobadoSecretaria;
-      void guardarDocumento(COLECCIONES.actas, actaId, {
-        ...actaActual,
-        aprobadoPresidente: pres,
-        aprobadoSecretaria: sec,
-        estado: pres && sec ? 'Borrador' : 'En_Solicitud_Edicion'
-      });
+  const aprobarEdicionActa = async (actaId: string, rol: 'Presidente' | 'Secretaria') => {
+    if (advertirBloqueo('actas', actaId)) return;
+    if (modoLocal || !usuario || (rol === 'Presidente' ? usuario.rol !== 'Director' : usuario.rol !== 'Secretario')) {
+      alert('Esta firma corresponde únicamente a una cuenta autenticada con el cargo indicado.'); return;
     }
+    try {
+      await runTransaction(db, async tx => {
+        const ref = doc(db, COLECCIONES.actas, actaId);
+        const snapshot = await tx.get(ref);
+        const acta = snapshot.data() as Acta | undefined;
+        if (!acta || acta.estado !== 'En_Solicitud_Edicion') return;
+        const pres = rol === 'Presidente' ? true : acta.aprobadoPresidente;
+        const sec = rol === 'Secretaria' ? true : acta.aprobadoSecretaria;
+        tx.update(ref, {
+          aprobadoPresidente: pres, aprobadoSecretaria: sec,
+          ...(rol === 'Presidente' ? { firmaEdicionDirectorUid: usuario.uid } : { firmaEdicionSecretarioUid: usuario.uid }),
+          estado: pres && sec ? 'Borrador' : 'En_Solicitud_Edicion'
+        });
+      });
+    } catch { alert('No se pudo registrar la firma. Revisa la conexión, el cargo y las reglas.'); }
   };
 
-  const guardarEdicionActa = (actaId: string, temas: string, acuerdos: string) => {
-    const actaActual = actasRef.current.find(a => a.id === actaId);
-    setActas(prev => prev.map(a => {
-      if (a.id === actaId) {
-        return {
-          ...a,
-          backupAnterior: {
-            temasTratados: a.temasTratados,
-            acuerdos: a.acuerdos,
-            fechaModificacion: new Date().toISOString()
-          },
-          temasTratados: temas,
-          acuerdos: acuerdos,
-          version: a.version + 1,
-          estado: 'Cerrada',
-          aprobadoPresidente: true,
-          aprobadoSecretaria: true
-        };
-      }
-      return a;
-    }));
-    if (actaActual) {
-      void guardarDocumento(COLECCIONES.actas, actaId, {
-        ...actaActual,
-        backupAnterior: {
-          temasTratados: actaActual.temasTratados,
-          acuerdos: actaActual.acuerdos,
-          fechaModificacion: new Date().toISOString()
-        },
-        temasTratados: temas,
-        acuerdos: acuerdos,
-        version: actaActual.version + 1,
-        estado: 'Cerrada',
-        aprobadoPresidente: true,
-        aprobadoSecretaria: true
+  const guardarEdicionActa = async (actaId: string, temas: string, acuerdos: string): Promise<boolean> => {
+    if (advertirBloqueo('actas', actaId)) return false;
+    if (modoLocal || !usuario) { alert('La edición autorizada requiere conexión y sesión con Google.'); return false; }
+    try {
+      await runTransaction(db, async tx => {
+        const ref = doc(db, COLECCIONES.actas, actaId);
+        const snapshot = await tx.get(ref);
+        const acta = snapshot.data() as Acta | undefined;
+        if (!acta || acta.estado !== 'Borrador' || !acta.aprobadoPresidente || !acta.aprobadoSecretaria || !acta.firmaEdicionDirectorUid || !acta.firmaEdicionSecretarioUid || acta.firmaEdicionDirectorUid === acta.firmaEdicionSecretarioUid) throw new Error('Faltan firmas');
+        tx.update(ref, {
+          backupAnterior: { temasTratados: acta.temasTratados, acuerdos: acta.acuerdos, fechaModificacion: new Date().toISOString() },
+          temasTratados: temas, acuerdos, version: acta.version + 1, estado: 'Cerrada'
+        });
       });
-    }
+      return true;
+    } catch { alert('No se pudo guardar. Revisa las dos firmas, los cargos vigentes y la conexión. Tus cambios siguen en el formulario.'); return false; }
   };
 
   const deshacerEdicionActa = (actaId: string) => {
-    const actaActual = actasRef.current.find(a => a.id === actaId);
-    setActas(prev => prev.map(a => {
-      if (a.id === actaId && a.backupAnterior) {
-        return {
-          ...a,
-          temasTratados: a.backupAnterior.temasTratados,
-          acuerdos: a.backupAnterior.acuerdos,
-          backupAnterior: undefined,
-          version: a.version + 1
-        };
-      }
-      return a;
-    }));
-    if (actaActual?.backupAnterior) {
-      void guardarDocumento(COLECCIONES.actas, actaId, {
-        ...actaActual,
-        temasTratados: actaActual.backupAnterior.temasTratados,
-        acuerdos: actaActual.backupAnterior.acuerdos,
-        backupAnterior: undefined,
-        version: actaActual.version + 1
-      });
+    if (advertirBloqueo('actas', actaId)) return;
+    const acta = actasRef.current.find(a => a.id === actaId);
+    if (!acta?.backupAnterior) return;
+    if (acta.estado !== 'Borrador' || !acta.firmaEdicionDirectorUid || !acta.firmaEdicionSecretarioUid) {
+      if (acta.estado !== 'En_Solicitud_Edicion') solicitarEdicionActa(actaId);
+      alert('Para restaurar el respaldo, Dirección y Secretaría deben autorizar la apertura. Luego pulsa Deshacer nuevamente.');
+      return;
     }
+    guardarEdicionActa(actaId, acta.backupAnterior.temasTratados, acta.backupAnterior.acuerdos);
+  };
+
+  const intentarAvisoPush = async (id: string) => {
+    if (modoLocal || !auth.currentUser) return;
+    try {
+      await fetch(`/api/avisos?id=${encodeURIComponent(id)}`, { method: 'POST', headers: { Authorization: `Bearer ${await auth.currentUser.getIdToken()}` } });
+    } catch { /* El cron recupera los avisos recientes que no llegaron al servidor. */ }
   };
 
   // Funciones de Justificaciones
   const agregarJustificacion = (nueva: Omit<Justificacion, 'id'>) => {
     const id = `just-${Date.now()}`;
     const notificacion: NotificacionItem = {
-      id: `notif-${Date.now()}`,
+      id: `notif-${crypto.randomUUID()}`,
       tipo: 'Justificacion',
       titulo: 'Nueva Justificación Enviada',
       mensaje: `Motivo: ${nueva.motivo.slice(0, 50)}...`,
-      fecha: 'Ahora',
+      fecha: new Date().toISOString(),
       leido: false,
       accionId: id
     };
     setJustificaciones(prev => [{ ...nueva, id }, ...prev]);
     setNotificaciones(prev => [notificacion, ...prev]);
     void guardarDocumento(COLECCIONES.justificaciones, id, { ...nueva, id });
-    void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion);
+    void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion).then(() => intentarAvisoPush(notificacion.id));
   };
 
   const resolverJustificacion = (id: string, estado: 'Aprobado' | 'Rechazado') => {
@@ -937,13 +918,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Notificaciones
-  const marcarNotificacionLeida = (id: string) => {
-    const notificacionActual = notificacionesRef.current.find(n => n.id === id);
-    setNotificaciones(prev => prev.map(n => n.id === id ? { ...n, leido: true } : n));
-    if (notificacionActual) {
-      void guardarDocumento(COLECCIONES.notificaciones, id, { ...notificacionActual, leido: true });
-    }
-  };
+  const marcarNotificacionLeida = (id: string) => { void marcarLeida(id); };
 
   // Documentos institucionales (Libro de Documentos)
   const agregarDocumento = (nuevo: Omit<DocumentoInstitucional, 'id'>) => {
@@ -953,12 +928,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const eliminarDocumento = (id: string) => {
-    setDocumentos(prev => prev.filter(d => d.id !== id));
-    void eliminarDocumentoFirestore(COLECCIONES.documentos, id);
+    void solicitarEliminacion('documentos', id, documentosRef.current.find(d => d.id === id)?.titulo || id);
   };
 
-  // Documentos de un evento: se almacenan fuera de los eventos para que las
-  // reglas de Firestore puedan impedir que el rol Miembro vea enlaces sensibles.
   const agregarDocumentoEvento = (
     eventoId: string,
     docAdjunto: Omit<DocumentoEvento, 'id' | 'eventoId'>
@@ -975,6 +947,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Documentos de respaldo de un miembro (se guardan dentro de su ficha)
   const agregarDocumentoMiembro = (integranteId: string, docAdjunto: Omit<DocumentoAdjunto, 'id'>) => {
+    if (advertirBloqueo('integrantes', integranteId)) return;
     const nuevo: DocumentoAdjunto = { ...docAdjunto, id: `docm-${Date.now()}` };
     const integranteActual = integrantesRef.current.find(i => i.id === integranteId);
     setIntegrantes(prev => prev.map(i => (
@@ -991,6 +964,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const eliminarDocumentoMiembro = (integranteId: string, docId: string) => {
+    if (advertirBloqueo('integrantes', integranteId)) return;
     const integranteActual = integrantesRef.current.find(i => i.id === integranteId);
     setIntegrantes(prev => prev.map(i => (
       i.id === integranteId
@@ -1024,46 +998,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       0
     );
   }, [integrantes, eventos, asistencias, cartas, actas, justificaciones, notificaciones, documentos, documentosEvento]);
-
-  // Retira los registros de demostración que sincronizaron las primeras
-  // versiones de Solibook: se borran del dispositivo y de la nube. Solo se
-  // tocan los identificadores conocidos de la demo, por lo que el trabajo real
-  // del ministerio nunca se pierde. Devuelve cuántos documentos eliminó.
-  const limpiarDatosDemo = async (): Promise<number> => {
-    setIntegrantes(prev => filtrarDatosDemo('integrantes', prev));
-    setEventos(prev => filtrarDatosDemo('eventos', prev));
-    setAsistencias(prev => filtrarDatosDemo('asistencias', prev));
-    setCartas(prev => filtrarDatosDemo('cartas', prev));
-    setActas(prev => filtrarDatosDemo('actas', prev));
-    setJustificaciones(prev => filtrarDatosDemo('justificaciones', prev));
-    setNotificaciones(prev => filtrarDatosDemo('notificaciones', prev));
-    setDocumentos(prev => filtrarDatosDemo('documentos', prev));
-    setDocumentosEvento(prev => filtrarDatosDemo('documentosEvento', prev));
-
-    const porColeccion: [string, string[]][] = [
-      [COLECCIONES.integrantes, idsDemoDe('integrantes')],
-      [COLECCIONES.eventos, idsDemoDe('eventos')],
-      [COLECCIONES.asistencias, idsDemoDe('asistencias')],
-      [COLECCIONES.cartas, idsDemoDe('cartas')],
-      [COLECCIONES.actas, idsDemoDe('actas')],
-      [COLECCIONES.justificaciones, idsDemoDe('justificaciones')],
-      [COLECCIONES.notificaciones, idsDemoDe('notificaciones')],
-      [COLECCIONES.documentos, idsDemoDe('documentos')],
-      [COLECCIONES.documentosEvento, idsDemoDe('documentosEvento')]
-    ];
-
-    await Promise.all(
-      porColeccion
-        .filter(([, ids]) => ids.length > 0)
-        .map(([coleccion, ids]) => eliminarDocumentosFirestore(coleccion, ids))
-    );
-
-    // Se cierra el candado de siembra: ningún equipo con copias locales
-    // antiguas puede volver a subir la demostración.
-    await bloquearSiembraDe(Object.values(COLECCIONES));
-
-    return porColeccion.reduce((total, [, ids]) => total + ids.length, 0);
-  };
 
   // Botón Maestro de Recarga PWA
   const forzarActualizacionApp = () => {
@@ -1114,7 +1048,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         agregarJustificacion,
         resolverJustificacion,
         marcarJustificacionLeida,
-        notificaciones,
+        notificaciones: [...new Map([...notificaciones, ...avisos].map(n => [n.id, n])).values()].sort((a, b) => (Date.parse(b.fecha) || 0) - (Date.parse(a.fecha) || 0)).map(n => ({ ...n, leido: leidas[n.id] === true })),
         marcarNotificacionLeida,
         documentos,
         agregarDocumento,
@@ -1126,8 +1060,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         eliminarDocumentoEvento,
         forzarActualizacionApp,
         usuarioActivo,
-        setUsuarioActivo,
-        limpiarDatosDemo,
         cantidadDatosDemoEnUso
       }}
     >

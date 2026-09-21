@@ -1,6 +1,29 @@
 /* global firebase */
-// Service worker de Firebase Cloud Messaging para avisos de cumpleaños cuando
+// Service worker de Firebase Cloud Messaging para avisos del calendario y cumpleaños cuando
 // Solibook está cerrada. La configuración web de Firebase no es secreta.
+// Registrar antes de Firebase para controlar también sus notificaciones
+// automáticas. Reutiliza una ventana propia y abre la agenda al tocar el aviso.
+self.addEventListener('notificationclick', event => {
+  event.stopImmediatePropagation();
+  event.notification.close();
+  const datos = event.notification.data;
+  const enlace = datos?.url || datos?.FCM_MSG?.fcmOptions?.link || '/';
+  let destino;
+  try {
+    const url = new URL(enlace, self.location.origin);
+    destino = url.origin === self.location.origin ? url.href : self.location.origin;
+  } catch { destino = self.location.origin; }
+  event.waitUntil((async () => {
+    const ventanas = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const existente = ventanas.find(ventana => new URL(ventana.url).origin === self.location.origin);
+    if (existente) {
+      const navegada = await existente.navigate(destino);
+      return (navegada || existente).focus();
+    }
+    return clients.openWindow(destino);
+  })());
+});
+
 importScripts('https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/12.19.0/firebase-messaging-compat.js');
 
@@ -16,9 +39,12 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage(payload => {
-  const titulo = payload.notification?.title || 'Solibook';
+  // FCM ya muestra automáticamente los mensajes con notification. Mostrarlos
+  // otra vez aquí producía dos avisos por un único envío.
+  if (payload.notification) return;
+  const titulo = payload.data?.title || 'Solibook';
   const opciones = {
-    body: payload.notification?.body || 'Tienes un nuevo recordatorio.',
+    body: payload.data?.body || 'Tienes un nuevo recordatorio.',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
     tag: payload.messageId || 'solibook-aviso',
@@ -26,16 +52,4 @@ messaging.onBackgroundMessage(payload => {
   };
 
   self.registration.showNotification(titulo, opciones);
-});
-
-self.addEventListener('notificationclick', event => {
-  event.notification.close();
-  const destino = event.notification.data?.url || '/';
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(ventanas => {
-      const existente = ventanas.find(ventana => 'focus' in ventana);
-      if (existente) return existente.focus();
-      return clients.openWindow(destino);
-    })
-  );
 });

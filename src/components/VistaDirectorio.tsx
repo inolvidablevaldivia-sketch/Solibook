@@ -1,5 +1,6 @@
 'use client';
 
+import { useEliminaciones } from '@/context/EliminacionesContext';
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
@@ -295,11 +296,11 @@ const TablaMiembros: React.FC<{
 };
 
 export const VistaDirectorio: React.FC = () => {
+  const { solicitar, advertirBloqueo, solicitudes } = useEliminaciones();
   const {
     integrantes,
     agregarIntegrante,
     actualizarIntegrante,
-    eliminarIntegrante,
     eventos,
     asistencias
   } = useApp();
@@ -346,6 +347,7 @@ export const VistaDirectorio: React.FC = () => {
   const perfilSeleccionado = integrantes.find(i => i.id === perfilSeleccionadoId) || null;
 
   const abrirParaEditar = (item: Integrante) => {
+    if (advertirBloqueo('integrantes', item.id)) return;
     setPerfilSeleccionadoId(null);
     setEditando(item);
     setNombre(item.nombreCompleto);
@@ -400,22 +402,15 @@ export const VistaDirectorio: React.FC = () => {
   };
 
   const marcarComoInactivo = (item: Integrante) => {
+    if (advertirBloqueo('integrantes', item.id)) return;
     actualizarIntegrante(item.id, { estado: 'Inactivo' });
   };
 
-  const confirmarEliminar = (item: Integrante) => {
-    if (
-      confirm(
-        `¿Eliminar a ${item.nombreCompleto}? Se quitará del listado y de las estadísticas. Esta acción no se puede deshacer.`
-      )
-    ) {
-      setPerfilSeleccionadoId(null);
-      eliminarIntegrante(item.id);
-    }
-  };
+  const confirmarEliminar = (item: Integrante) => { void solicitar('integrantes', item.id, item.nombreCompleto); };
 
   return (
     <div className="space-y-3 max-w-3xl lg:max-w-7xl mx-auto pb-16">
+      {solicitudes.filter(s => s.tipo === 'integrantes' && s.estado === 'Pendiente').map(s => <p key={s.id} className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-xl p-3">{s.titulo}: eliminación pendiente. La ficha está protegida; resuelve la solicitud en Notificaciones.</p>)}
       {/* Barra de Filtros y Acciones */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3">
         <div className="flex items-center justify-between gap-2">

@@ -1,18 +1,17 @@
 'use client';
 
+import { RegistroEliminable } from './RegistroEliminable';
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { Acta } from '@/types';
 import {
-  FileText,
   Plus,
   Lock,
   Unlock,
   Copy,
   Printer,
   History,
-  CheckCircle2,
   AlertTriangle,
   X,
   Check,
@@ -27,10 +26,9 @@ export const VistaActas: React.FC = () => {
     solicitarEdicionActa,
     aprobarEdicionActa,
     guardarEdicionActa,
-    deshacerEdicionActa,
-    usuarioActivo
+    deshacerEdicionActa
   } = useApp();
-  const { puede } = useAuth();
+  const { puede, usuario } = useAuth();
 
   const [modalNueva, setModalNueva] = useState(false);
   const [modalEdicion, setModalEdicion] = useState<Acta | null>(null);
@@ -79,11 +77,10 @@ export const VistaActas: React.FC = () => {
     setEditAcuerdos(acta.acuerdos);
   };
 
-  const handleGuardarCambios = (e: React.FormEvent) => {
+  const handleGuardarCambios = async (e: React.FormEvent) => {
     e.preventDefault();
     if (modalEdicion) {
-      guardarEdicionActa(modalEdicion.id, editTemas, editAcuerdos);
-      setModalEdicion(null);
+      if (await guardarEdicionActa(modalEdicion.id, editTemas, editAcuerdos)) setModalEdicion(null);
     }
   };
 
@@ -194,10 +191,11 @@ export const VistaActas: React.FC = () => {
         {actas.map(acta => {
           const estaCerrada = acta.estado === 'Cerrada';
           const enEdicion = acta.estado === 'En_Solicitud_Edicion';
+          const listaParaEditar = acta.estado === 'Borrador' && acta.aprobadoPresidente && acta.aprobadoSecretaria && !!acta.firmaEdicionDirectorUid && !!acta.firmaEdicionSecretarioUid && acta.firmaEdicionDirectorUid !== acta.firmaEdicionSecretarioUid;
 
           return (
+            <RegistroEliminable key={acta.id} tipo="actas" registroId={acta.id} titulo={acta.titulo}>
             <div
-              key={acta.id}
               className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3"
             >
               <div className="flex items-start justify-between gap-2">
@@ -209,7 +207,7 @@ export const VistaActas: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-slate-800">{acta.titulo}</span>
                       <span className="text-[10px] font-semibold text-slate-400">v{acta.version}</span>
-                      {estaCerrada && (
+                      {(estaCerrada || (acta.estado === 'Borrador' && !listaParaEditar)) && (
                         <span className="text-[10px] bg-slate-100 text-slate-600 font-semibold px-2 py-0.2 rounded-md">
                           Cerrada & Aprobada
                         </span>
@@ -276,7 +274,7 @@ export const VistaActas: React.FC = () => {
 
                 <div className="flex items-center gap-2">
                   {/* Si el acta está cerrada y se quiere modificar */}
-                  {estaCerrada && (
+                  {(estaCerrada || (acta.estado === 'Borrador' && !listaParaEditar)) && (
                     <button
                       onClick={() => {
                         if (confirm('El acta está cerrada bajo protocolo. ¿Deseas solicitar autorización conjunta (Presidente + Secretaria) para editarla?')) {
@@ -293,12 +291,14 @@ export const VistaActas: React.FC = () => {
                   {enEdicion && (
                     <div className="flex items-center gap-1.5">
                       <button
+                        disabled={usuario?.rol !== 'Director' || acta.aprobadoPresidente}
                         onClick={() => aprobarEdicionActa(acta.id, 'Presidente')}
                         className="px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold"
                       >
-                        Autorizar como Presidente
+                        Autorizar como Director
                       </button>
                       <button
+                        disabled={usuario?.rol !== 'Secretario' || acta.aprobadoSecretaria}
                         onClick={() => aprobarEdicionActa(acta.id, 'Secretaria')}
                         className="px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold"
                       >
@@ -315,6 +315,7 @@ export const VistaActas: React.FC = () => {
                     </div>
                   )}
 
+                  {listaParaEditar && puede('gestionar_actas') && <button onClick={() => abrirEdicion(acta)} className="px-3 py-1 bg-emerald-700 text-white rounded-lg text-xs">Editar acta autorizada</button>}
                   {/* Botón Deshacer Edición (Historial de 30 días) */}
                   {acta.backupAnterior && (
                     <button
@@ -332,6 +333,7 @@ export const VistaActas: React.FC = () => {
                 </div>
               </div>
             </div>
+            </RegistroEliminable>
           );
         })}
       </div>

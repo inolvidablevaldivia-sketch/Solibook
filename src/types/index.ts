@@ -108,7 +108,8 @@ export interface Justificacion {
   motivo: string;
   adjuntoUrl?: string; // base64 o URL
   estado: EstadoJustificacion;
-  canalIngreso: 'Secretaria_Manual' | 'Link_Autoservicio';
+  canalIngreso: 'Secretaria_Manual' | 'Link_Autoservicio' | 'App_Integrante';
+  creadoPorUid?: string;
   vistoPor: string[]; // Lista de iniciales o nombres de directiva
   fechaIngreso: string;
 }
@@ -144,11 +145,13 @@ export interface Acta {
   };
   aprobadoPresidente: boolean;
   aprobadoSecretaria: boolean;
+  firmaEdicionDirectorUid?: string;
+  firmaEdicionSecretarioUid?: string;
 }
 
 export interface NotificacionItem {
   id: string;
-  tipo: 'Justificacion' | 'Carta' | 'Acta' | 'Calendario';
+  tipo: 'Justificacion' | 'Carta' | 'Acta' | 'Calendario' | 'Eliminacion';
   titulo: string;
   mensaje: string;
   fecha: string;
