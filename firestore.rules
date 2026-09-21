@@ -67,6 +67,12 @@ service cloud.firestore {
       return get(rutaUsuario(request.auth.uid)).data;
     }
 
+    // Perfil de otra cuenta, o null si la cuenta ya no existe: así un uid vacío
+    // o borrado niega en vez de romper la evaluación de la regla.
+    function perfilDe(uidCuenta) {
+      return uidCuenta != '' && exists(rutaUsuario(uidCuenta)) ? get(rutaUsuario(uidCuenta)).data : null;
+    }
+
     // Cuenta que existe y no está suspendida. Basta para la autopista de datos
     // propios (ajustes, tokens de push, ficha propia), no para los libros.
     function activo() {
@@ -77,7 +83,7 @@ service cloud.firestore {
 
     // Cargo vigente, con los valores antiguos traducidos al vuelo.
     function rolDe(p) {
-      let r = p.get('rol', '');
+      let r = p == null ? '' : p.get('rol', '');
       return r == 'Administrador' ? 'Director'
         : r == 'Secretaria' ? 'Secretario'
         : r == 'Directiva' ? 'Administrativo'
@@ -555,7 +561,8 @@ service cloud.firestore {
     // ¿La cuenta indicada puede ocupar ese cupo, hoy? Por cargo o por atribución
     // concedida. Lee el documento de la otra cuenta, como hace la app.
     function ocupaCupo(uidCupo, cupo) {
-      let p = get(rutaUsuario(uidCupo)).data;
+      let p = perfilDe(uidCupo);
+      if (p == null) return false;
       let rol = rolDe(p);
       let prestamo = cupo == 'Director' ? 'cupo_direccion'
         : cupo == 'Secretario' ? 'cupo_secretaria'
@@ -565,9 +572,7 @@ service cloud.firestore {
         : cupo == 'Secretario' ? rol == 'Secretario'
         : cupo == 'Tesorero' ? rol == 'Tesorero'
         : rol == 'Vocal';
-      return uidCupo != ''
-        && exists(rutaUsuario(uidCupo))
-        && p.get('activo', false) == true
+      return p.get('activo', false) == true
         && (propio || atribucionVigente(p, prestamo));
     }
 
@@ -692,10 +697,13 @@ service cloud.firestore {
     // administrativos. El Miembro ve los de las actividades donde está citado,
     // y no los puede editar.
     function convocadoA(eventoId) {
+      let ruta = /databases/$(database)/documents/eventos/$(eventoId);
+      if (eventoId == '' || !exists(ruta)) return false;
       let ficha = perfil().get('integranteId', '');
-      let e = get(/databases/$(database)/documents/eventos/$(eventoId)).data;
+      if (ficha == '') return false;
+      let e = get(ruta).data;
       let cuerda = exists(rutaFicha(ficha)) ? get(rutaFicha(ficha)).data.get('cuerda', '') : '';
-      return eventoId != '' && exists(/databases/$(database)/documents/eventos/$(eventoId)) && ficha != '' && (
+      return (
         e.get('tipoConvocatoria', '') == 'Todos'
         || (e.get('tipoConvocatoria', '') == 'Por Cuerda' && e.get('cuerdasConvocadas', []).hasAny([cuerda]))
         || (e.get('tipoConvocatoria', '') == 'Personalizada' && e.get('integrantesConvocadosIds', []).hasAny([ficha]))
