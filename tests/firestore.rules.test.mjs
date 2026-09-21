@@ -10,11 +10,12 @@ test('reglas de Firebase: eliminaciones, privacidad y firmas', { skip: !process.
   try {
     await env.withSecurityRulesDisabled(async contexto => {
       const db = contexto.firestore();
-      for (const [uid, rol] of [['d', 'Director'], ['s', 'Secretario'], ['dev', 'Desarrollador'], ['m', 'Miembro'], ['t', 'Tesorero']]) await setDoc(doc(db, 'usuarios', uid), { uid, rol, activo: true, integranteId: 'm', nombre: uid });
+      for (const [uid, rol] of [['d', 'Director'], ['d2', 'Director'], ['s', 'Secretario'], ['dev', 'Desarrollador'], ['m', 'Miembro'], ['t', 'Tesorero']]) await setDoc(doc(db, 'usuarios', uid), { uid, rol, activo: true, integranteId: 'm', nombre: uid });
       for (const coleccion of ['cartas', 'actas', 'documentos', 'integrantes']) await setDoc(doc(db, coleccion, 'registro'), { titulo: 'Original', vistoPor: [] });
       await setDoc(doc(db, 'configuracion/estado'), { fundador: 'd' });
     });
     const d = env.authenticatedContext('d').firestore();
+    const d2 = env.authenticatedContext('d2').firestore();
     const s = env.authenticatedContext('s').firestore();
     const dev = env.authenticatedContext('dev').firestore();
     const m = env.authenticatedContext('m').firestore();
@@ -48,6 +49,22 @@ test('reglas de Firebase: eliminaciones, privacidad y firmas', { skip: !process.
       await assertSucceeds(updateDoc(doc(d, 'actas/firmas'), { aprobadoPresidente: true, firmaEdicionDirectorUid: 'd' }));
       await assertSucceeds(updateDoc(doc(s, 'actas/firmas'), { aprobadoSecretaria: true, firmaEdicionSecretarioUid: 's', estado: 'Borrador' }));
       await assertSucceeds(updateDoc(doc(s, 'actas/firmas'), { acuerdos: 'Autorizado', estado: 'Cerrada', version: 2 }));
+    });
+    await t.test('el Director fundador administra cuentas como Desarrollador; un Director no fundador, no', async () => {
+      // Director no fundador: sigue sin poder nombrar Directores ni tocar cuentas superiores.
+      await assertFails(updateDoc(doc(d2, 'usuarios/t'), { rol: 'Director' }));
+      await assertFails(updateDoc(doc(d2, 'usuarios/d'), { activo: false }));
+      await assertFails(updateDoc(doc(d2, 'usuarios/dev'), { rol: 'Miembro' }));
+      await assertSucceeds(updateDoc(doc(d2, 'usuarios/t'), { rol: 'Directiva' }));
+      // Director fundador (configuracion/estado.fundador == 'd'): permisos de Desarrollador.
+      await assertSucceeds(updateDoc(doc(d, 'usuarios/t'), { rol: 'Director' }));
+      await assertSucceeds(updateDoc(doc(d, 'usuarios/d2'), { activo: false }));
+      await assertSucceeds(updateDoc(doc(d, 'usuarios/d2'), { activo: true, rol: 'Secretario' }));
+      // Nadie, ni el fundador, reasigna la cuenta fundadora ni borra cuentas.
+      await assertFails(updateDoc(doc(d, 'configuracion/estado'), { fundador: 'd2' }));
+      await assertFails(deleteDoc(doc(d, 'usuarios/d2')));
+      // Un Secretario nunca administra cuentas.
+      await assertFails(updateDoc(doc(s, 'usuarios/m'), { rol: 'Tesorero' }));
     });
   } finally { await env.cleanup(); }
 });

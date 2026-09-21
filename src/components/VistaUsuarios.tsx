@@ -4,7 +4,7 @@ import React from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { RolUsuario } from '@/types';
-import { ROLES, DESCRIPCION_ROL, MATRIZ_PERMISOS, ETIQUETA_PERMISO } from '@/lib/permisos';
+import { ROLES, ROLES_SUPERIORES, DESCRIPCION_ROL, MATRIZ_PERMISOS, ETIQUETA_PERMISO } from '@/lib/permisos';
 import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut, Wrench } from 'lucide-react';
 
 export const VistaUsuarios: React.FC = () => {
@@ -18,7 +18,8 @@ export const VistaUsuarios: React.FC = () => {
     cerrarSesion,
     modoLocal,
     puede,
-    puedeAdministrarCuenta
+    puedeAdministrarCuenta,
+    esSuperAdmin
   } = useAuth();
 
   const esUnoMismo = (uid: string) => usuario?.uid === uid;
@@ -111,7 +112,9 @@ export const VistaUsuarios: React.FC = () => {
                     className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-xl bg-white focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
                   >
                     {ROLES.map(r => (
-                      <option key={r} value={r}>
+                      // Director y Desarrollador solo los nombra quien opera con
+                      // permisos de Desarrollador (incluido el Director fundador).
+                      <option key={r} value={r} disabled={!esSuperAdmin && ROLES_SUPERIORES.includes(r) && r !== u.rol}>
                         {r}
                       </option>
                     ))}
@@ -152,7 +155,7 @@ export const VistaUsuarios: React.FC = () => {
                     propio
                       ? 'No puedes suspender tu propia cuenta'
                       : !puedeAdministrarCuenta(u.uid)
-                        ? 'Solo el Desarrollador administra cuentas de nivel Director o Desarrollador'
+                        ? 'Solo el Desarrollador o el Director fundador administran cuentas de nivel Director o Desarrollador'
                         : undefined
                   }
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-bold rounded-lg border transition-colors shrink-0 ${

@@ -63,13 +63,15 @@ export const ROLES: RolUsuario[] = [
   'Desarrollador'
 ];
 
-// Roles con poder sobre cuentas: solo el Desarrollador puede crear, modificar
-// o suspender cuentas con estos roles (el Director administra al resto).
+// Roles con poder sobre cuentas: solo el Desarrollador —o el Director fundador,
+// que opera con sus mismos permisos (ver rolEfectivo en AuthContext)— puede
+// crear, modificar o suspender cuentas con estos roles (el Director administra
+// al resto).
 export const ROLES_SUPERIORES: RolUsuario[] = ['Director', 'Desarrollador'];
 
 export const DESCRIPCION_ROL: Record<RolUsuario, string> = {
   Director:
-    'Acceso total a la operación y administración de usuarios, excepto modificar cuentas de nivel Director o Desarrollador.',
+    'Acceso total a la operación y administración de usuarios, excepto modificar cuentas de nivel Director o Desarrollador. El Director fundador (quien creó la cuenta inicial) actúa con los permisos de Desarrollador: administra cualquier cuenta, nombra Directores y elimina registros sin segunda firma.',
   Secretario: 'Gestión completa de la operación y registros, sin administrar usuarios ni roles.',
   Tesorero:
     'Gestión completa de la operación, sin administrar roles, sin agregar ni eliminar miembros y sin aprobar justificaciones.',
@@ -78,7 +80,7 @@ export const DESCRIPCION_ROL: Record<RolUsuario, string> = {
   Miembro:
     'Consulta el calendario y puede justificar sus propias actividades futuras donde esté citado. El resto de la información está restringida.',
   Desarrollador:
-    'Soporte técnico con acceso absoluto, incluida la administración de cuentas de cualquier nivel.'
+    'Soporte técnico con acceso absoluto, incluida la administración de cuentas de cualquier nivel. El Director fundador comparte estos permisos sin cambiar de rol.'
 };
 
 // Permisos por diferencia respecto al acceso total, para mantener la matriz

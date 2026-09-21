@@ -9,6 +9,10 @@ rules_version = '2';
 //   Desarrollador → acceso absoluto, incluidas las cuentas de nivel Director.
 //   Director      → todos los permisos, EXCEPTO eliminar o modificar cuentas
 //                   de nivel Director o Desarrollador.
+//   Director fundador (rol Director + uid en configuracion/estado.fundador)
+//                 → administra cuentas con los mismos permisos del
+//                   Desarrollador, sin cambiar su rol guardado. Es el mismo
+//                   criterio que aplica el servidor en las eliminaciones.
 //   Secretario    → todos los permisos, excepto administrar usuarios y roles.
 //   Tesorero      → Secretario, menos: agregar/eliminar miembros y aprobar o
 //                   rechazar justificaciones.
@@ -77,6 +81,14 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/configuracion/estado).data.fundador == request.auth.uid;
     }
 
+    // Director fundador: rol Director vigente y activo, cuyo uid reclamó
+    // configuracion/estado. Opera sobre las cuentas como el Desarrollador
+    // (rolEfectivo en AuthContext y `directo` en gestionarEliminacion.ts).
+    // Un Director que no es fundador NO recibe esta excepción.
+    function esDirectorFundador() {
+      return rolEn(['Director']) && esFundador();
+    }
+
     function rolValido(rol) {
       return rol in ['Director', 'Secretario', 'Tesorero', 'Directiva', 'Miembro', 'Desarrollador'];
     }
@@ -115,11 +127,13 @@ service cloud.firestore {
         );
 
       allow update: if
-        // 1) El Desarrollador puede todo, sobre cualquier cuenta.
+        // 1) El Desarrollador —y el Director fundador, con sus mismos
+        //    permisos— puede todo, sobre cualquier cuenta.
         esDesarrollador()
-        // 2) El Director administra cuentas NO superiores y jamás puede
-        //    nombrar a alguien Director o Desarrollador. Las cuentas con el
-        //    valor antiguo 'Secretaria' también las puede administrar.
+        || esDirectorFundador()
+        // 2) Un Director no fundador administra cuentas NO superiores y jamás
+        //    puede nombrar a alguien Director o Desarrollador. Las cuentas con
+        //    el valor antiguo 'Secretaria' también las puede administrar.
         || (
           rolEn(['Director'])
           && resource.data.rol in ['Secretario', 'Secretaria', 'Tesorero', 'Directiva', 'Miembro']
