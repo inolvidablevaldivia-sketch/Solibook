@@ -31,6 +31,9 @@ import { useAjustes } from '@/context/AjustesContext';
 import { useAuth } from '@/context/AuthContext';
 import { obtenerProximoCumpleanos } from '@/lib/cumpleanos';
 import { ColeccionConDemo, filtrarDatosDemo } from '@/lib/datosDemo';
+import { firmar, agregarAcuse, crearAcuse } from '@/lib/autorias';
+import { aplicarEdicion, firmarCupo, solicitarApertura, autorizarApertura } from '@/lib/actasProtocolo';
+import type { Autoria, CupoFirma } from '@/types';
 
 interface AppContextType {
   // Integrantes
@@ -60,14 +63,20 @@ interface AppContextType {
   // Cartas
   cartas: Carta[];
   agregarCarta: (nueva: Omit<Carta, 'id'>) => void;
-  marcarCartaLeida: (cartaId: string, usuarioInitials: string) => void;
+  marcarCartaLeida: (cartaId: string) => void;
   actualizarEstadoCarta: (cartaId: string, estado: Carta['estado']) => void;
+  /** Corrige una carta ya registrada; queda firmado y todos se enteran. */
+  actualizarCarta: (cartaId: string, cambios: Partial<Omit<Carta, 'id' | 'vistoPor'>>) => boolean;
+  /** Pide a quien ya la leyó que vuelva a acusar recibo. */
+  solicitarReacuse: (cartaId: string) => void;
 
   // Actas
   actas: Acta[];
   agregarActa: (nueva: Omit<Acta, 'id'>) => void;
   solicitarEdicionActa: (actaId: string) => void;
   aprobarEdicionActa: (actaId: string, rol: 'Presidente' | 'Secretaria') => void;
+  /** Firma un cupo de apertura del acta (Dirección, Secretaría, Tesorería, Vocalía). */
+  firmarCupoActa: (actaId: string, cupo: CupoFirma) => Promise<string>;
   guardarEdicionActa: (actaId: string, temas: string, acuerdos: string) => Promise<boolean>;
   deshacerEdicionActa: (actaId: string) => void;
 
@@ -75,7 +84,7 @@ interface AppContextType {
   justificaciones: Justificacion[];
   agregarJustificacion: (nueva: Omit<Justificacion, 'id'>) => void;
   resolverJustificacion: (id: string, estado: 'Aprobado' | 'Rechazado') => void;
-  marcarJustificacionLeida: (id: string, usuarioInitials: string) => void;
+  marcarJustificacionLeida: (id: string) => void;
 
   // Notificaciones
   notificaciones: NotificacionItem[];
@@ -184,7 +193,8 @@ const calcularMarcadoAsistencia = (
   eventoId: string,
   integranteId: string,
   estado: EstadoAsistencia,
-  motivo?: string
+  motivo?: string,
+  marca?: Autoria
 ): { siguiente: AsistenciaRegistro[]; documento: AsistenciaRegistro } => {
   const existente = prev.find(a => a.eventoId === eventoId && a.integranteId === integranteId);
   if (existente) {
@@ -192,7 +202,8 @@ const calcularMarcadoAsistencia = (
       ...existente,
       estado,
       motivoJustificacion: motivo ?? existente.motivoJustificacion,
-      horaMarcado: new Date().toISOString()
+      horaMarcado: new Date().toISOString(),
+      ...(marca ? { marcadoPor: marca } : {})
     };
     return {
       siguiente: prev.map(a => (a.id === existente.id ? documento : a)),
@@ -217,7 +228,8 @@ const calcularMarcadoMasivo = (
   prev: AsistenciaRegistro[],
   eventoId: string,
   integrantesIds: string[],
-  estado: EstadoAsistencia
+  estado: EstadoAsistencia,
+  marca?: Autoria
 ): { siguiente: AsistenciaRegistro[]; guardar: AsistenciaRegistro[]; eliminar: string[] } => {
   const justificadosProtegidos = prev.filter(
     a => a.eventoId === eventoId && a.estado === 'Justificado'
@@ -232,7 +244,8 @@ const calcularMarcadoMasivo = (
       eventoId,
       integranteId: id,
       estado,
-      horaMarcado: new Date().toISOString()
+      horaMarcado: new Date().toISOString(),
+      ...(marca ? { marcadoPor: marca } : {})
     }));
   return {
     siguiente: [...restantes, ...justificadosProtegidos, ...nuevos],
@@ -256,7 +269,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Identidad de sincronización: al iniciar o cerrar sesión se rearman las
   // suscripciones a Firestore (las reglas pueden exigir usuario autenticado).
-  const { usuario, modoLocal, puede } = useAuth();
+  const { usuario, modoLocal, puede, puedeCupo } = useAuth();
+
+  /**
+   * Autoría de la sesión actual, para escribirla dentro del documento que se
+   * está registrando. En modo local no hay a quién atribuirle nada.
+   */
+  const quien = (): Autoria | undefined => firmar(usuario);
+
+  /** Aviso interno + push, para lo que alguien tiene que enterarse de una vez. */
+  const notificar = (tipo: NotificacionItem['tipo'], titulo: string, mensaje: string, accionId?: string) => {
+    const aviso: NotificacionItem = {
+      id: `notif-${crypto.randomUUID()}`,
+      tipo,
+      titulo,
+      mensaje,
+      fecha: new Date().toISOString(),
+      leido: false,
+      ...(accionId ? { accionId } : {})
+    };
+    setNotificaciones(prev => [aviso, ...prev]);
+    void guardarDocumento(COLECCIONES.notificaciones, aviso.id, aviso).then(() => intentarAvisoPush(aviso.id));
+    return aviso;
+  };
   const { solicitar: solicitarEliminacion, advertirBloqueo } = useEliminaciones();
   const { leidas, marcarLeida, avisos } = useAjustes();
   const claveSync = modoLocal ? 'modo-local' : (usuario?.uid ?? 'sin-sesion');
@@ -558,7 +593,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Funciones de Integrantes
   const agregarIntegrante = (nuevo: Omit<Integrante, 'id'>) => {
     const id = `int-${Date.now()}`;
-    const documento: Integrante = { ...nuevo, id };
+    const autor = quien();
+    const documento: Integrante = { ...nuevo, id, ...(autor ? { creadoPor: autor, editadoPor: autor } : {}) };
     setIntegrantes(prev =>
       ordenarIntegrantes([...prev, documento])
     );
@@ -568,8 +604,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const actualizarIntegrante = (id: string, datos: Partial<Integrante>) => {
     if (advertirBloqueo('integrantes', id)) return;
     const actual = integrantesRef.current.find(item => item.id === id);
-    setIntegrantes(prev => prev.map(item => item.id === id ? { ...item, ...datos } : item));
-    if (actual) void guardarDocumento(COLECCIONES.integrantes, id, { ...actual, ...datos });
+    const autor = quien();
+    const cambios = { ...datos, ...(autor ? { editadoPor: autor } : {}) };
+    setIntegrantes(prev => prev.map(item => (item.id === id ? { ...item, ...cambios } : item)));
+    if (actual) void guardarDocumento(COLECCIONES.integrantes, id, { ...actual, ...cambios });
   };
 
   const eliminarIntegrante = (id: string) => {
@@ -579,16 +617,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Funciones de Eventos
   const agregarEvento = (nuevo: Omit<Evento, 'id'>): string => {
     const id = `ev-${Date.now()}`;
-    const documento: Evento = { ...nuevo, id };
+    const autor = quien();
+    const documento: Evento = { ...nuevo, id, ...(autor ? { creadoPor: autor, editadoPor: autor } : {}) };
     setEventos(prev => [documento, ...prev]);
     void guardarDocumento(COLECCIONES.eventos, id, documento);
     return id;
   };
 
   const agregarEventosLote = (nuevos: Omit<Evento, 'id'>[]) => {
+    const autor = quien();
     const listos: Evento[] = nuevos.map((n, idx) => ({
       ...n,
-      id: `ev-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`
+      id: `ev-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
+      ...(autor ? { creadoPor: autor, editadoPor: autor } : {})
     }));
     setEventos(prev => [...listos, ...prev]);
     void guardarDocumentos(COLECCIONES.eventos, listos);
@@ -611,12 +652,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const actualizarEvento = (id: string, datos: Partial<Evento>, editarFuturosDelGrupo: boolean = false) => {
-    const { siguiente, cambiados } = calcularActualizacionEvento(
+    const { siguiente: base, cambiados: pendientes } = calcularActualizacionEvento(
       eventosRef.current,
       id,
       datos,
       editarFuturosDelGrupo
     );
+    // Toda edición queda firmada: es lo que responde «quién cambió el ensayo».
+    const autor = quien();
+    const cambiados = autor ? pendientes.map(ev => ({ ...ev, editadoPor: autor })) : pendientes;
+    const siguiente = autor
+      ? base.map(ev => (cambiados.some(c => c.id === ev.id) ? { ...ev, editadoPor: autor } : ev))
+      : base;
     setEventos(siguiente);
     void guardarDocumentos(COLECCIONES.eventos, cambiados);
   };
@@ -640,7 +687,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       eventoId,
       integranteId,
       estado,
-      motivo
+      motivo,
+      quien()
     );
     setAsistencias(siguiente);
     void guardarDocumento(COLECCIONES.asistencias, documento.id, documento);
@@ -655,7 +703,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       asistenciasRef.current,
       eventoId,
       integrantesIds,
-      estado
+      estado,
+      quien()
     );
     setAsistencias(siguiente);
     void guardarDocumentos(COLECCIONES.asistencias, guardar);
@@ -721,15 +770,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const cerrarAsistenciaEvento = (eventoId: string) => {
     const eventoActual = eventosRef.current.find(ev => ev.id === eventoId);
-    setEventos(prev => prev.map(ev => ev.id === eventoId ? { ...ev, asistenciaFinalizada: true } : ev));
+    const autor = quien();
+    // «Quién cerró la lista» es tan importante como quién la pasó: después se
+    // discute una falta y hay que saber quién congeló el conteo.
+    const cambios = { asistenciaFinalizada: true, ...(autor ? { listaCerradaPor: autor } : {}) };
+    setEventos(prev => prev.map(ev => (ev.id === eventoId ? { ...ev, ...cambios } : ev)));
     if (eventoActual) {
-      void guardarDocumento(COLECCIONES.eventos, eventoId, { ...eventoActual, asistenciaFinalizada: true });
+      void guardarDocumento(COLECCIONES.eventos, eventoId, { ...eventoActual, ...cambios });
     }
   };
 
   // Funciones de Cartas
   const agregarCarta = (nueva: Omit<Carta, 'id'>) => {
     const id = `car-${crypto.randomUUID()}`;
+    const autor = quien();
     const notificacion: NotificacionItem = {
       id: `notif-${crypto.randomUUID()}`,
       tipo: 'Carta',
@@ -739,27 +793,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       leido: false,
       accionId: id
     };
-    setCartas(prev => [{ ...nueva, id }, ...prev]);
+    const carta: Carta = { ...nueva, id, ...(autor ? { registradaPor: autor } : {}) };
+    setCartas(prev => [carta, ...prev]);
     setNotificaciones(prev => [notificacion, ...prev]);
-    void guardarDocumento(COLECCIONES.cartas, id, { ...nueva, id });
+    void guardarDocumento(COLECCIONES.cartas, id, carta);
     void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion).then(() => intentarAvisoPush(notificacion.id));
   };
 
-  const marcarCartaLeida = (cartaId: string, usuarioInitials: string) => {
+  /**
+   * Acuse de recibo con nombre, cargo y hora. Antes se guardaban sólo las
+   * iniciales, así que no se podía decir cuál de los Directores leyó la carta
+   * y dos personas con las mismas iniciales se estorbaban entre sí.
+   */
+  const marcarCartaLeida = (cartaId: string) => {
     if (advertirBloqueo('cartas', cartaId)) return;
+    if (!usuario) return;
     const cartaActual = cartasRef.current.find(c => c.id === cartaId);
-    setCartas(prev => prev.map(c => {
-      if (c.id === cartaId && !c.vistoPor.includes(usuarioInitials)) {
-        return { ...c, vistoPor: [...c.vistoPor, usuarioInitials] };
-      }
-      return c;
-    }));
-    if (cartaActual && !cartaActual.vistoPor.includes(usuarioInitials)) {
-      void guardarDocumento(COLECCIONES.cartas, cartaId, {
-        ...cartaActual,
-        vistoPor: [...cartaActual.vistoPor, usuarioInitials]
-      });
-    }
+    if (!cartaActual) return;
+    const acuses = agregarAcuse(cartaActual.vistoPor, crearAcuse(usuario));
+    if (acuses.length === cartaActual.vistoPor.length) return; // ya había acusado
+    const siguiente = { ...cartaActual, vistoPor: acuses };
+    setCartas(prev => prev.map(c => (c.id === cartaId ? siguiente : c)));
+    void guardarDocumento(COLECCIONES.cartas, cartaId, siguiente);
+  };
+
+  /**
+   * Secretaría corrige una carta escrita mal. El acuse anterior sigue valiendo,
+   * pero queda marcado que el texto cambió después de leerla, y se avisa.
+   */
+  const actualizarCarta = (cartaId: string, cambios: Partial<Omit<Carta, 'id' | 'vistoPor'>>): boolean => {
+    if (advertirBloqueo('cartas', cartaId)) return false;
+    const actual = cartasRef.current.find(c => c.id === cartaId);
+    if (!actual) return false;
+    const autor = quien();
+    const fecha = new Date().toISOString();
+    const siguiente: Carta = {
+      ...actual,
+      ...cambios,
+      ...(autor ? { ultimaEdicion: { ...autor, fecha } } : {}),
+      reacuseDesde: fecha
+    };
+    setCartas(prev => prev.map(c => (c.id === cartaId ? siguiente : c)));
+    void guardarDocumento(COLECCIONES.cartas, cartaId, siguiente);
+    notificar('Carta', 'Carta corregida', `«${siguiente.asunto || siguiente.folio}» la editó ${autor?.nombre || 'la directiva'}. Revisa el texto antes de confiar en tu acuse.`, cartaId);
+    return true;
+  };
+
+  /** Pide a quien ya leyó la carta que vuelva a acusar recibo. */
+  const solicitarReacuse = (cartaId: string) => {
+    const actual = cartasRef.current.find(c => c.id === cartaId);
+    if (!actual) return;
+    const siguiente: Carta = { ...actual, reacuseDesde: new Date().toISOString() };
+    setCartas(prev => prev.map(c => (c.id === cartaId ? siguiente : c)));
+    void guardarDocumento(COLECCIONES.cartas, cartaId, siguiente);
+    notificar('Carta', 'Requieren tu acuse otra vez', `La carta «${actual.asunto || actual.folio}» cambió: vuelve a acusarla.`, cartaId);
   };
 
   const actualizarEstadoCarta = (cartaId: string, estado: Carta['estado']) => {
@@ -772,8 +859,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Funciones de Actas
   const agregarActa = (nueva: Omit<Acta, 'id'>) => {
     const id = `act-${Date.now()}`;
-    setActas(prev => [{ ...nueva, id }, ...prev]);
-    void guardarDocumento(COLECCIONES.actas, id, { ...nueva, id });
+    const autor = quien();
+    // Nadie cierra un acta solo: arranca en borrador y se cierra cuando están
+    // las tres firmas obligatorias (Dirección, Secretaría y Tesorería).
+    const acta: Acta = {
+      ...nueva,
+      id,
+      ...(autor ? { registradaPor: autor } : {}),
+      estado: 'Borrador',
+      firmas: {},
+      aprobadoPresidente: false,
+      aprobadoSecretaria: false,
+      aprobadoTesoreria: false,
+      aprobadoVocalia: false
+    };
+    setActas(prev => [acta, ...prev]);
+    void guardarDocumento(COLECCIONES.actas, id, acta);
+  };
+
+  /**
+   * Firma de un cupo del acta. En borrador suma a la apertura; en
+   * 'En_Solicitud_Edicion' es la autorización de reapertura, que sólo da
+   * Dirección y Secretaría. Se escribe en transacción para que dos firmas
+   * simultáneas no se pisen.
+   */
+  const firmarCupoActa = async (actaId: string, cupo: CupoFirma): Promise<string> => {
+    if (advertirBloqueo('actas', actaId)) return 'El acta tiene una eliminación pendiente.';
+    if (modoLocal || !usuario) return 'La firma necesita conexión y sesión con Google.';
+    if (!puedeCupo(cupo)) return 'Tu cargo no puede firmar ese cupo: pídeselo a Dirección.';
+    const firma = { uid: usuario.uid, nombre: usuario.nombre, rol: usuario.rol, fecha: new Date().toISOString() };
+    try {
+      await runTransaction(db, async tx => {
+        const ref = doc(db, COLECCIONES.actas, actaId);
+        const snapshot = await tx.get(ref);
+        const acta = snapshot.data() as Acta | undefined;
+        if (!acta) throw new Error('El acta ya no existe.');
+        tx.set(ref, acta.estado === 'En_Solicitud_Edicion'
+          ? autorizarApertura(acta, cupo, firma)
+          : firmarCupo(acta, cupo, firma));
+      });
+      return '';
+    } catch (error) {
+      return error instanceof Error ? error.message : 'No se pudo registrar la firma. Revisa la conexión y las reglas.';
+    }
   };
 
   const solicitarEdicionActa = (actaId: string) => {
@@ -788,24 +916,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       leido: false,
       accionId: actaId
     };
-    setActas(prev => prev.map(a => a.id === actaId ? {
-      ...a,
-      estado: 'En_Solicitud_Edicion',
-      aprobadoPresidente: false,
-      aprobadoSecretaria: false,
-      firmaEdicionDirectorUid: '',
-      firmaEdicionSecretarioUid: ''
-    } : a));
+    setActas(prev => prev.map(a => (a.id === actaId ? solicitarApertura(a) : a)));
     setNotificaciones(prev => [notificacion, ...prev]);
     if (actaActual) {
-      void guardarDocumento(COLECCIONES.actas, actaId, {
-        ...actaActual,
-        estado: 'En_Solicitud_Edicion',
-        aprobadoPresidente: false,
-        aprobadoSecretaria: false,
-      firmaEdicionDirectorUid: '',
-      firmaEdicionSecretarioUid: ''
-      });
+      void guardarDocumento(COLECCIONES.actas, actaId, solicitarApertura(actaActual));
     }
     void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion).then(() => intentarAvisoPush(notificacion.id));
   };
@@ -841,10 +955,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const snapshot = await tx.get(ref);
         const acta = snapshot.data() as Acta | undefined;
         if (!acta || acta.estado !== 'Borrador' || !acta.aprobadoPresidente || !acta.aprobadoSecretaria || !acta.firmaEdicionDirectorUid || !acta.firmaEdicionSecretarioUid || acta.firmaEdicionDirectorUid === acta.firmaEdicionSecretarioUid) throw new Error('Faltan firmas');
-        tx.update(ref, {
-          backupAnterior: { temasTratados: acta.temasTratados, acuerdos: acta.acuerdos, fechaModificacion: new Date().toISOString() },
-          temasTratados: temas, acuerdos, version: acta.version + 1, estado: 'Cerrada'
-        });
+        const autor = quien();
+        // El texto corregido vuelve a quedar sin firmas: los tres cupos tienen
+        // que volver a firmar sobre lo que ahora dice el acta.
+        tx.set(ref, { ...aplicarEdicion(acta, temas, acuerdos), ...(autor ? { editadaPor: autor } : {}) });
       });
       return true;
     } catch { alert('No se pudo guardar. Revisa las dos firmas, los cargos vigentes y la conexión. Tus cambios siguen en el formulario.'); return false; }
@@ -872,6 +986,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Funciones de Justificaciones
   const agregarJustificacion = (nueva: Omit<Justificacion, 'id'>) => {
     const id = `just-${Date.now()}`;
+    const autor = quien();
     const notificacion: NotificacionItem = {
       id: `notif-${crypto.randomUUID()}`,
       tipo: 'Justificacion',
@@ -881,18 +996,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       leido: false,
       accionId: id
     };
-    setJustificaciones(prev => [{ ...nueva, id }, ...prev]);
+    const conAutor: Justificacion = {
+      ...nueva,
+      id,
+      ...(autor ? { creadoPorUid: autor.uid, creadoPorNombre: autor.nombre, creadoPorRol: autor.rol } : {})
+    };
+    setJustificaciones(prev => [conAutor, ...prev]);
     setNotificaciones(prev => [notificacion, ...prev]);
-    void guardarDocumento(COLECCIONES.justificaciones, id, { ...nueva, id });
+    void guardarDocumento(COLECCIONES.justificaciones, id, conAutor);
     void guardarDocumento(COLECCIONES.notificaciones, notificacion.id, notificacion).then(() => intentarAvisoPush(notificacion.id));
   };
 
   const resolverJustificacion = (id: string, estado: 'Aprobado' | 'Rechazado') => {
     const justificacionActual = justificacionesRef.current.find(j => j.id === id);
-    setJustificaciones(prev => prev.map(j => (j.id === id ? { ...j, estado } : j)));
     if (!justificacionActual) return;
+    // Queda constancia de quién aprobó o rechazó y cuándo: sin esto, la
+    // resolución no era atribuible.
+    const autor = quien();
+    const resolucion = autor
+      ? {
+          resueltaPorUid: autor.uid,
+          resueltaPorNombre: autor.nombre,
+          resueltaPorRol: autor.rol,
+          fechaResolucion: new Date().toISOString()
+        }
+      : {};
+    setJustificaciones(prev => prev.map(j => (j.id === id ? { ...j, estado, ...resolucion } : j)));
 
-    void guardarDocumento(COLECCIONES.justificaciones, id, { ...justificacionActual, estado });
+    void guardarDocumento(COLECCIONES.justificaciones, id, { ...justificacionActual, estado, ...resolucion });
     // También actualizar la asistencia asociada si existe
     if (estado === 'Aprobado') {
       marcarAsistencia(justificacionActual.eventoId, justificacionActual.integranteId, 'Justificado', justificacionActual.motivo);
@@ -901,20 +1032,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const marcarJustificacionLeida = (id: string, usuarioInitials: string) => {
+  const marcarJustificacionLeida = (id: string) => {
+    if (!usuario) return;
     const justificacionActual = justificacionesRef.current.find(j => j.id === id);
-    setJustificaciones(prev => prev.map(j => {
-      if (j.id === id && !j.vistoPor.includes(usuarioInitials)) {
-        return { ...j, vistoPor: [...j.vistoPor, usuarioInitials] };
-      }
-      return j;
-    }));
-    if (justificacionActual && !justificacionActual.vistoPor.includes(usuarioInitials)) {
-      void guardarDocumento(COLECCIONES.justificaciones, id, {
-        ...justificacionActual,
-        vistoPor: [...justificacionActual.vistoPor, usuarioInitials]
-      });
-    }
+    if (!justificacionActual) return;
+    const acuses = agregarAcuse(justificacionActual.vistoPor, crearAcuse(usuario));
+    if (acuses.length === justificacionActual.vistoPor.length) return;
+    const siguiente = { ...justificacionActual, vistoPor: acuses };
+    setJustificaciones(prev => prev.map(j => (j.id === id ? siguiente : j)));
+    void guardarDocumento(COLECCIONES.justificaciones, id, siguiente);
   };
 
   // Notificaciones
@@ -923,8 +1049,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Documentos institucionales (Libro de Documentos)
   const agregarDocumento = (nuevo: Omit<DocumentoInstitucional, 'id'>) => {
     const id = `doc-${Date.now()}`;
-    setDocumentos(prev => [{ ...nuevo, id }, ...prev]);
-    void guardarDocumento(COLECCIONES.documentos, id, { ...nuevo, id });
+    const autor = quien();
+    const documento: DocumentoInstitucional = { ...nuevo, id, ...(autor ? { subidoPor: autor } : {}) };
+    setDocumentos(prev => [documento, ...prev]);
+    void guardarDocumento(COLECCIONES.documentos, id, documento);
   };
 
   const eliminarDocumento = (id: string) => {
@@ -935,7 +1063,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     eventoId: string,
     docAdjunto: Omit<DocumentoEvento, 'id' | 'eventoId'>
   ) => {
-    const nuevo: DocumentoEvento = { ...docAdjunto, eventoId, id: `doce-${Date.now()}` };
+    const autor = quien();
+    const nuevo: DocumentoEvento = { ...docAdjunto, eventoId, id: `doce-${Date.now()}`, ...(autor ? { subidoPor: autor } : {}) };
     setDocumentosEvento(prev => [...prev, nuevo]);
     void guardarDocumento(COLECCIONES.documentosEvento, nuevo.id, nuevo);
   };
@@ -948,7 +1077,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Documentos de respaldo de un miembro (se guardan dentro de su ficha)
   const agregarDocumentoMiembro = (integranteId: string, docAdjunto: Omit<DocumentoAdjunto, 'id'>) => {
     if (advertirBloqueo('integrantes', integranteId)) return;
-    const nuevo: DocumentoAdjunto = { ...docAdjunto, id: `docm-${Date.now()}` };
+    const autor = quien();
+    const nuevo: DocumentoAdjunto = { ...docAdjunto, id: `docm-${Date.now()}`, ...(autor ? { subidoPor: autor } : {}) };
     const integranteActual = integrantesRef.current.find(i => i.id === integranteId);
     setIntegrantes(prev => prev.map(i => (
       i.id === integranteId
@@ -1037,11 +1167,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cartas,
         agregarCarta,
         marcarCartaLeida,
+        actualizarCarta,
+        solicitarReacuse,
         actualizarEstadoCarta,
         actas,
         agregarActa,
         solicitarEdicionActa,
         aprobarEdicionActa,
+        firmarCupoActa,
         guardarEdicionActa,
         deshacerEdicionActa,
         justificaciones,

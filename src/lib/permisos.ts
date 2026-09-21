@@ -1,6 +1,8 @@
 'use client';
 
 import { RolUsuario } from '@/types';
+import type { Atribucion } from '@/types';
+import { permisosPorAtribuciones } from './atributos';
 
 // Catálogo central de permisos de la aplicación.
 export type Permiso =
@@ -26,6 +28,8 @@ export type Permiso =
   | 'acuse_recibo' // marcar "visto por" en cartas y justificaciones
   | 'ver_metricas'
   | 'exportar_datos'
+  | 'ver_cuentas' // leer la pantalla de cuentas sin cambiar nada
+  | 'aprobar_ingresos' // aceptar, vincular o rechazar una cuenta nueva
   | 'gestionar_usuarios';
 
 export const PERMISOS: Permiso[] = [
@@ -51,71 +55,118 @@ export const PERMISOS: Permiso[] = [
   'acuse_recibo',
   'ver_metricas',
   'exportar_datos',
+  'ver_cuentas',
+  'aprobar_ingresos',
   'gestionar_usuarios'
 ];
 
 export const ROLES: RolUsuario[] = [
   'Director',
+  'Vocal',
   'Secretario',
   'Tesorero',
-  'Directiva',
+  'Administrativo',
   'Miembro',
   'Desarrollador'
 ];
 
-// Roles con poder sobre cuentas: solo el Desarrollador —o el Director fundador,
-// que opera con sus mismos permisos (ver rolEfectivo en AuthContext)— puede
-// crear, modificar o suspender cuentas con estos roles (el Director administra
-// al resto).
-export const ROLES_SUPERIORES: RolUsuario[] = ['Director', 'Desarrollador'];
+// Cuentas que no pueden ser creadas, bajadas ni suspendidas por un Director
+// que no sea fundador: tienen el peso de Dirección o la llave de la app. Incluir
+// a 'Vocal' aquí es deliberado: nadie desarma la firma de un Vocal de rebote.
+export const ROLES_SUPERIORES: RolUsuario[] = ['Director', 'Vocal', 'Desarrollador'];
 
 export const DESCRIPCION_ROL: Record<RolUsuario, string> = {
   Director:
-    'Acceso total a la operación y administración de usuarios, excepto modificar cuentas de nivel Director o Desarrollador. El Director fundador (quien creó la cuenta inicial) actúa con los permisos de Desarrollador: administra cualquier cuenta, nombra Directores y elimina registros sin segunda firma.',
-  Secretario: 'Gestión completa de la operación y registros, sin administrar usuarios ni roles.',
+    'Toda la operación y la administración de cuentas de Secretaría, Tesorería, ayudantes y miembros. No borra por sí solo: los borrados de cartas, actas, documentos y fichas necesitan la firma de Secretaría. Para pasar el cargo ofrece el traspaso y espera la aceptación. El Director fundador actúa con los permisos de Desarrollador.',
+  Vocal:
+    'Director Vocal: agenda, ensayos, repertorio, listas y justificativos (los aprueba y rechaza); lee correspondencia y actas y puede acusar recibo. No administra cuentas, no borra registros y no mueve el libro de documentos. Su firma en el acta es la cuarta, opcional.',
+  Secretario:
+    'Toda la operación y los libros, sin administrar cuentas ni roles. Acepta los ingresos nuevos, corrige cartas y firma el cupo de Secretaría en actas y borrados.',
   Tesorero:
-    'Gestión completa de la operación, sin administrar roles, sin agregar ni eliminar miembros y sin aprobar justificaciones.',
-  Directiva:
-    'Gestión de la operación, sin administrar roles, sin agregar ni eliminar miembros, sin aprobar justificaciones, sin dar acuse de recibo y sin eliminar documentos.',
+    'Lee la correspondencia y las actas y da acuse de recibo; tiene el libro de documentos y firma el acta (cupo obligatorio). Crea y edita fichas. La agenda y las listas son de Secretariado: si un día las necesita, se le concede como atribución.',
+  Administrativo:
+    'Ayudante de Secretaría o Tesorería: registra la operación (actividades, listas, cartas, actas en borrador, documentos y justificativos de otros). No cierra listas, no acusa recibo, no aprueba justificativos, no borra y no administra cuentas. Cada acción queda firmada con su nombre y cargo.',
   Miembro:
-    'Consulta el calendario y puede justificar sus propias actividades futuras donde esté citado. El resto de la información está restringida.',
+    'Ve las actividades en las que está citado, con sus enlaces, y justifica sus inasistencias futuras. No edita nada. Sus datos los mantiene la Secretaría.',
   Desarrollador:
-    'Soporte técnico con acceso absoluto, incluida la administración de cuentas de cualquier nivel. El Director fundador comparte estos permisos sin cambiar de rol.'
+    'Soporte técnico con acceso absoluto, incluidas las cuentas de cualquier nivel. El Director fundador comparte estos permisos sin cambiar de rol.'
 };
 
 // Permisos por diferencia respecto al acceso total, para mantener la matriz
-// alineada con la definición acordada de cada rol.
-const SIN_ADMINISTRAR_ROLES: Permiso[] = PERMISOS.filter(p => p !== 'gestionar_usuarios');
+// alineada con la definición acordada de cada cargo.
+const SIN_ADMINISTRAR_CUENTAS: Permiso[] = PERMISOS.filter(p => p !== 'gestionar_usuarios');
 
-const TESORERO: Permiso[] = SIN_ADMINISTRAR_ROLES.filter(
+// Lo que la Dirección hace en la agenda y los libros, sin administrar cuentas
+// y sin cerrar borrados. Se le resta también lo que el Vocal no toca.
+const SIN_LIBRO_DOCUMENTOS: Permiso[] = SIN_ADMINISTRAR_CUENTAS.filter(
+  p => p !== 'ver_documentos' && p !== 'gestionar_documentos' && p !== 'eliminar_documento'
+);
+
+/** El Vocal escribe en agenda, listas y justificativos; lee los demás libros. */
+const VOCAL: Permiso[] = SIN_LIBRO_DOCUMENTOS.filter(
   p =>
-    p !== 'crear_miembro' &&
+    p !== 'gestionar_cartas' &&
+    p !== 'gestionar_actas' &&
     p !== 'eliminar_miembro' &&
-    p !== 'resolver_justificaciones'
+    p !== 'ver_cuentas' &&
+    p !== 'aprobar_ingresos'
 );
 
-const DIRECTIVA: Permiso[] = TESORERO.filter(
-  p => p !== 'acuse_recibo' && p !== 'eliminar_documento'
-);
+/** El Tesorero mira, acusa y firma; la operación diaria es de Secretariado. */
+const TESORERO: Permiso[] = [
+  'ver_agenda',
+  'ver_cartas',
+  'acuse_recibo',
+  'ver_actas',
+  'ver_documentos',
+  'gestionar_documentos',
+  'eliminar_documento',
+  'ver_miembros',
+  'crear_miembro',
+  'editar_miembro',
+  'gestionar_justificaciones'
+];
+
+/** Ayudante: registra la operación, no la cierra ni la borra. */
+const ADMINISTRATIVO: Permiso[] = [
+  'ver_agenda',
+  'crear_evento',
+  'editar_evento',
+  'pasar_lista',
+  'gestionar_justificaciones',
+  'ver_cartas',
+  'gestionar_cartas',
+  'ver_actas',
+  'gestionar_actas',
+  'ver_documentos',
+  'gestionar_documentos',
+  'ver_miembros',
+  'crear_miembro',
+  'editar_miembro'
+];
 
 const MIEMBRO: Permiso[] = ['ver_agenda'];
 
 export const MATRIZ_PERMISOS: Record<RolUsuario, Permiso[]> = {
   Director: [...PERMISOS],
   Desarrollador: [...PERMISOS],
-  Secretario: SIN_ADMINISTRAR_ROLES,
+  Vocal: VOCAL,
+  Secretario: [...SIN_ADMINISTRAR_CUENTAS],
   Tesorero: TESORERO,
-  Directiva: DIRECTIVA,
+  Administrativo: ADMINISTRATIVO,
   Miembro: MIEMBRO
 };
 
-// Migración de roles antiguos guardados antes del nuevo modelo.
+// Migración de cargos guardados antes de este modelo.
 const ROLES_LEGADOS: Record<string, RolUsuario> = {
   Administrador: 'Director',
-  Secretaria: 'Secretario'
+  Secretaria: 'Secretario',
+  // El asiento que se llamaba 'Directiva' hoy es 'Administrativo': describe a
+  // los ayudantes y deja de confundirse con la «Cuerda Directiva».
+  Directiva: 'Administrativo'
 };
 
-// Convierte cualquier valor guardado (nuevo o antiguo) al rol vigente.
+// Convierte cualquier valor guardado (nuevo o antiguo) al cargo vigente.
 export const normalizarRol = (rol: string | undefined): RolUsuario => {
   if (!rol) return 'Miembro';
   if (rol in ROLES_LEGADOS) return ROLES_LEGADOS[rol];
@@ -126,6 +177,24 @@ export const tienePermiso = (rol: RolUsuario | string | undefined, permiso: Perm
   if (!rol) return false;
   return MATRIZ_PERMISOS[normalizarRol(rol)]?.includes(permiso) ?? false;
 };
+
+/** Permisos reales de una cuenta: los de su cargo más las atribuciones vigentes. */
+export const permisosEfectivos = (
+  rol: RolUsuario | string | undefined,
+  atribuciones?: Atribucion[],
+  ahora = Date.now()
+): Set<Permiso> => {
+  const efectivos = new Set<Permiso>(MATRIZ_PERMISOS[normalizarRol(rol)] || []);
+  for (const permiso of permisosPorAtribuciones(atribuciones, ahora)) efectivos.add(permiso);
+  return efectivos;
+};
+
+export const puedeConAtribuciones = (
+  rol: RolUsuario | string | undefined,
+  permiso: Permiso,
+  atribuciones?: Atribucion[],
+  ahora = Date.now()
+): boolean => permisosEfectivos(rol, atribuciones, ahora).has(permiso);
 
 export const ETIQUETA_PERMISO: Record<Permiso, string> = {
   ver_agenda: 'Ver agenda',
@@ -150,5 +219,7 @@ export const ETIQUETA_PERMISO: Record<Permiso, string> = {
   acuse_recibo: 'Dar acuse de recibo (visto)',
   ver_metricas: 'Ver métricas',
   exportar_datos: 'Exportar datos',
+  ver_cuentas: 'Ver cuentas y cargos',
+  aprobar_ingresos: 'Aceptar ingresos nuevos',
   gestionar_usuarios: 'Gestionar usuarios'
 };

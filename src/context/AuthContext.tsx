@@ -11,8 +11,11 @@ import {
   browserLocalPersistence
 } from 'firebase/auth';
 import { doc, onSnapshot, runTransaction } from 'firebase/firestore';
-import { UsuarioApp, RolUsuario } from '@/types';
-import { Permiso, tienePermiso, normalizarRol, ROLES_SUPERIORES } from '@/lib/permisos';
+import { UsuarioApp, RolUsuario, CupoFirma } from '@/types';
+import { Permiso, normalizarRol, ROLES_SUPERIORES, permisosEfectivos } from '@/lib/permisos';
+import { puedeOcuparCupo, esAtributo, esAtributoDelicado } from '@/lib/atributos';
+import { puedeIngresar, puedeGestionarIngresos, estadoVigente, mensajeEspera } from '@/lib/ingresos';
+import { puedeResponder, textoOferta } from '@/lib/traspasos';
 import { COLECCIONES, suscribirseColeccion, guardarDocumento } from '@/lib/firestoreSync';
 import { retirarNotificacionesPush } from '@/lib/notificacionesPush';
 
@@ -45,13 +48,35 @@ interface AuthContextType {
   vincularIntegrante: (uid: string, integranteId?: string) => void;
   puede: (permiso: Permiso) => boolean;
   puedeAdministrarCuenta: (uid: string) => boolean;
+  /** Si la cuenta puede firmar tal cupo (actas y solicitudes de borrado). */
+  puedeCupo: (cupo: CupoFirma) => boolean;
+  /** La sesión está a la espera de que Dirección o Secretaría la acepte. */
+  enEspera: boolean;
+  /** Mensaje y oferta de traspaso pendientes para esta cuenta. */
+  esperaMensaje: string;
+  ofertaPendiente: UsuarioApp['ofertaDirector'];
+  puedeAceptarIngresos: boolean;
+  /** Aceptar un ingreso nuevo, opcionalmente vinculándolo a una ficha. */
+  aceptarIngreso: (uid: string, integranteId?: string) => void;
+  rechazarIngreso: (uid: string) => void;
+  otorgarAtribucion: (uid: string, atributo: string, opciones?: { hasta?: string; motivo?: string }) => string;
+  revocarAtribucion: (uid: string, atributo: string) => void;
+  /** Ofrecer el propio cargo de Director con ventana de respuesta. */
+  ofrecerCargo: (uidDestino: string) => Promise<string>;
+  /** Responder la oferta recibida: aceptarla o rechazarla. */
+  responderOferta: (aceptar: boolean) => Promise<string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Aplica la migración de roles antiguos (Administrador→Director,
 // Secretaria→Secretario) a cualquier usuario leído de la nube o del respaldo.
-const normalizarUsuario = (u: UsuarioApp): UsuarioApp => ({ ...u, rol: normalizarRol(u.rol) });
+const normalizarUsuario = (u: UsuarioApp): UsuarioApp => ({
+  ...u,
+  rol: normalizarRol(u.rol),
+  // Las cuentas anteriores al flujo de aprobación ya estaban aceptadas.
+  estadoIngreso: u.estadoIngreso || 'Aceptado'
+});
 
 // La primera persona que entra a la aplicación reclama la cuenta fundadora.
 // El reclamo vive en "configuracion/estado" dentro de una transacción, así dos
@@ -69,6 +94,14 @@ const reclamarFundador = async (uid: string): Promise<boolean> => {
     console.warn('[Sync] No se pudo verificar la cuenta fundadora:', error);
     return false;
   }
+};
+
+/** Qué ve una cuenta que todavía no fue aceptada, con la oferta si la hay. */
+const textoEspera = (cuenta: UsuarioApp | null): string => {
+  if (!cuenta) return '';
+  const base = mensajeEspera(estadoVigente(cuenta));
+  if (cuenta.ofertaDirector?.estado === 'Pendiente') return `${base} ${textoOferta(cuenta.ofertaDirector)}`;
+  return base;
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -175,6 +208,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             fotoUrl: datos.fotoUrl,
             rol: 'Miembro', // provisional hasta verificar el reclamo de fundador
             activo: true,
+            // Toda cuenta nueva queda a la espera: Dirección o Secretaría la
+            // acepta, la rechaza, o el pedido caduca a los 30 días.
+            estadoIngreso: 'Pendiente',
             fechaIngreso: ahora,
             ultimoAcceso: ahora
           };
@@ -194,7 +230,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Cuenta nueva: primero el reclamo transaccional de fundador, luego el
         // registro (las reglas exigen ese orden para otorgar el rol Director).
         void reclamarFundador(perfil.uid).then(esFundador => {
-          const definitivo: UsuarioApp = { ...perfil, rol: esFundador ? 'Director' : 'Miembro' };
+          const definitivo: UsuarioApp = {
+            ...perfil,
+            rol: esFundador ? 'Director' : 'Miembro',
+            estadoIngreso: esFundador ? 'Aceptado' : 'Pendiente'
+          };
           setUsuarios(prev => prev.map(u => (u.uid === definitivo.uid ? definitivo : u)));
           void guardarDocumento(COLECCIONES.usuarios, definitivo.uid, definitivo);
         });
@@ -372,19 +412,136 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const puedeAceptarIngresos =
+    !!usuario && usuario.activo && puedeGestionarIngresos(usuario.rol, usuario.atribuciones);
+
+  /**
+   * Una ficha, una cuenta. Si la ficha ya estaba vinculada a otra cuenta, el
+   * vínculo se traspasa y queda escrito en el registro de cada una: así se
+   * resuelve el caso de quien cambia de correo sin borrar la historia.
+   */
   const vincularIntegrante = (uid: string, integranteId?: string) => {
-    if (!puedeAdministrarCuenta(uid)) return;
+    if (!puedeAdministrarCuenta(uid) && !puedeAceptarIngresos) return;
     const actual = usuariosRef.current.find(u => u.uid === uid);
-    setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, integranteId } : u)));
-    if (actual) {
-      void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, integranteId });
+    const anterior = integranteId
+      ? usuariosRef.current.find(u => u.uid !== uid && u.integranteId === integranteId)
+      : undefined;
+    setUsuarios(prev =>
+      prev.map(u => {
+        if (u.uid === uid) return { ...u, integranteId };
+        if (anterior && u.uid === anterior.uid) return { ...u, integranteId: undefined };
+        return u;
+      })
+    );
+    if (actual) void guardarDocumento(COLECCIONES.usuarios, uid, { ...actual, integranteId });
+    if (anterior) void guardarDocumento(COLECCIONES.usuarios, anterior.uid, { ...anterior, integranteId: undefined });
+  };
+
+  // ─────────────────── Ingresos nuevos: aceptar o rechazar ───────────────────
+  const marcarIngreso = (uid: string, cambios: Partial<UsuarioApp>) => {
+    if (!puedeAceptarIngresos && rolEfectivo() !== 'Desarrollador') return;
+    const actual = usuariosRef.current.find(u => u.uid === uid);
+    if (!actual) return;
+    const siguiente = { ...actual, ...cambios };
+    setUsuarios(prev => prev.map(u => (u.uid === uid ? siguiente : u)));
+    void guardarDocumento(COLECCIONES.usuarios, uid, siguiente);
+  };
+
+  const aceptarIngreso = (uid: string, integranteId?: string) => {
+    marcarIngreso(uid, { estadoIngreso: 'Aceptado', rol: 'Miembro', ...(integranteId ? { integranteId } : {}) });
+  };
+
+  const rechazarIngreso = (uid: string) => {
+    marcarIngreso(uid, { estadoIngreso: 'Rechazado', activo: false });
+  };
+
+  // ─────────────────────── Atribuciones sobre la cuenta ───────────────────────
+  // Las delicadas (cupos de firma y borrados) sólo las concede quien opera con
+  // permisos de Desarrollador: el fundador o un Desarrollador. Un Director
+  // puede activar las simples, que son de registro diario.
+  const puedeConcederAtribuciones = (delicada: boolean): boolean => {
+    if (!delicada) return puede('gestionar_usuarios');
+    return rolEfectivo() === 'Desarrollador';
+  };
+
+  const otorgarAtribucion = (uid: string, atributo: string, opciones: { hasta?: string; motivo?: string } = {}): string => {
+    if (!esAtributo(atributo)) return 'Esa atribución no existe.';
+    const actual = usuariosRef.current.find(u => u.uid === uid);
+    if (!actual) return 'La cuenta ya no está disponible.';
+    if (!puedeConcederAtribuciones(esAtributoDelicado(atributo))) return 'Tu cargo no puede conceder esa atribución.';
+    const vigentes = (actual.atribuciones || []).filter(a => a.atributo !== atributo);
+    const siguiente: UsuarioApp = {
+      ...actual,
+      atribuciones: [
+        ...vigentes,
+        {
+          atributo,
+          otorgadoPor: { uid: usuario?.uid || '', nombre: usuario?.nombre || '', rol: usuario?.rol || '', fecha: new Date().toISOString() },
+          ...(opciones.motivo ? { motivo: opciones.motivo } : {}),
+          ...(opciones.hasta ? { hasta: opciones.hasta } : {})
+        }
+      ]
+    };
+    setUsuarios(prev => prev.map(u => (u.uid === uid ? siguiente : u)));
+    void guardarDocumento(COLECCIONES.usuarios, uid, siguiente);
+    return '';
+  };
+
+  const revocarAtribucion = (uid: string, atributo: string): string => {
+    const actual = usuariosRef.current.find(u => u.uid === uid);
+    if (!actual) return 'La cuenta ya no está disponible.';
+    if (!puedeConcederAtribuciones(esAtributoDelicado(atributo))) return 'Tu cargo no puede retirar esa atribución.';
+    const siguiente: UsuarioApp = {
+      ...actual,
+      atribuciones: (actual.atribuciones || []).filter(a => a.atributo !== atributo)
+    };
+    setUsuarios(prev => prev.map(u => (u.uid === uid ? siguiente : u)));
+    void guardarDocumento(COLECCIONES.usuarios, uid, siguiente);
+    return '';
+  };
+
+  // ─────────────────── Traspaso del cargo de Director (24 h) ───────────────────
+  const ofrecerCargo = async (uidDestino: string): Promise<string> => {
+    try {
+      const respuesta = await fetch('/api/cargos', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accion: 'ofrecer', destinoUid: uidDestino })
+      });
+      const datos = (await respuesta.json()) as { error?: string; mensaje?: string };
+      return datos.error || datos.mensaje || 'Oferta enviada.';
+    } catch {
+      return 'No se pudo enviar la oferta. Revisa la conexión.';
+    }
+  };
+
+  const responderOferta = async (aceptar: boolean): Promise<string> => {
+    try {
+      const respuesta = await fetch('/api/cargos', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accion: aceptar ? 'aceptar' : 'rechazar' })
+      });
+      const datos = (await respuesta.json()) as { error?: string; mensaje?: string };
+      return datos.error || datos.mensaje || '';
+    } catch {
+      return 'No se pudo responder la oferta. Revisa la conexión.';
     }
   };
 
   const puede = (permiso: Permiso) => {
     if (!usuario || !usuario.activo) return false;
-    return tienePermiso(usuario.rol, permiso);
+    // Una cuenta pendiente no ve datos del ministerio: sólo la espera.
+    if (!modoLocal && !puedeIngresar(usuario)) return false;
+    return permisosEfectivos(usuario.rol, usuario.atribuciones).has(permiso);
   };
+
+  const puedeCupo = (cupo: CupoFirma): boolean =>
+    !!usuario && usuario.activo && puedeIngresar(usuario) && puedeOcuparCupo(usuario.rol, cupo, usuario.atribuciones);
+
+  const enEspera = !!usuario && !modoLocal && !puedeIngresar(usuario);
+  const esperaMensaje = enEspera ? textoEspera(usuario) : '';
+  const ofertaPendiente = usuario?.ofertaDirector;
 
   return (
     <AuthContext.Provider
@@ -398,6 +555,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         esFundador,
         esSuperAdmin,
         rolEfectivo,
+        puedeCupo,
+        enEspera,
+        esperaMensaje,
+        ofertaPendiente,
+        puedeAceptarIngresos,
+        aceptarIngreso,
+        rechazarIngreso,
+        otorgarAtribucion,
+        revocarAtribucion,
+        ofrecerCargo,
+        responderOferta,
         iniciarSesionGoogle,
         cerrarSesion,
         entrarModoLocal,

@@ -7,20 +7,114 @@ export type EstadoJustificacion = 'Pendiente' | 'Aprobado' | 'Rechazado';
 export type EstadoCarta = 'Pendiente' | 'Aceptada' | 'Declinada' | 'Archivada';
 export type EstadoActa = 'Borrador' | 'Cerrada' | 'En_Solicitud_Edicion';
 
-export type RolUsuario = 'Director' | 'Secretario' | 'Tesorero' | 'Directiva' | 'Miembro' | 'Desarrollador';
+/**
+ * Cargos de la directiva. Un cargo define **quién es** la persona (lo que firma
+ * en un acta y lo que aparece en un acuse); el poder extra se concede con
+ * atribuciones (ver lib/atributos), que sólo suman y pueden vencer.
+ *
+ *   Director        → la operación completa y nombrar cargos.
+ *   Vocal           → «Director Vocal»: agenda, listas, justificativos, leer y
+ *                     acusar correspondencia y actas. No gestiona cuentas, no
+ *                     borra y no toca el libro de documentos.
+ *   Secretario      → la operación completa, sin administrar cuentas; acepta
+ *                     los ingresos nuevos y corrige cartas.
+ *   Tesorero        → lectura y acuses, el libro de documentos y firma el acta.
+ *                     No mueve la agenda ni las listas: eso es Secretariado.
+ *   Administrativo  → ayudante de Secretaría o Tesorería (el cargo que antes se
+ *                     llamaba 'Directiva'). Registra, no cierra ni borra.
+ *   Miembro         → su calendario y sus justificativos. Sin atribuciones.
+ *   Desarrollador   → soporte técnico con acceso absoluto.
+ *
+ * 'Director fundador' no es un cargo: es la cuenta que reclamó
+ * configuracion/estado y opera con los permisos de Desarrollador.
+ */
+export type RolUsuario =
+  | 'Director'
+  | 'Vocal'
+  | 'Secretario'
+  | 'Tesorero'
+  | 'Administrativo'
+  | 'Miembro'
+  | 'Desarrollador';
+
+/** Cupos de firma de la directiva. El de Dirección lo ocupa quien tiene el peso de Director. */
+export type CupoFirma = 'Director' | 'Secretario' | 'Tesorero' | 'Vocal';
+
+/**
+ * Autoría: quién hizo algo, con el cargo con el que actuó y cuándo. Se guarda
+ * en el documento para poder responder «qué Director autorizó este borrado» o
+ * «qué administrativo subió este archivo» sin perseguir a nadie.
+ */
+export interface Autoria {
+  uid: string;
+  nombre: string;
+  rol: string;
+  fecha?: string;
+}
+
+/** Un acuse de recibo es una autoría: la carta queda «vista por» alguien. */
+export type AcuseRecibo = Autoria;
+
+/**
+ * Como se guarda realmente: los acuses anteriores a este modelo eran cadenas con
+ * las iniciales y conviven con los nuevos, que son objetos. Al leerse se
+ * normalizan (ver lib/autorias); nunca se reescriben en silencio.
+ */
+export type AcuseGuardado = AcuseRecibo | string;
+
+/** Estado del alta de una cuenta que entró con su cuenta de Google. */
+export type EstadoIngreso = 'Pendiente' | 'Aceptado' | 'Rechazado' | 'Sin respuesta';
+
+/** Atribución activa concedida a una cuenta. Se retira borrando la entrada. */
+export interface Atribucion {
+  /** Identificador del atributo (ver lib/atributos). */
+  atributo: string;
+  /** Quién lo concedió y cuándo, para poder rendir cuentas. */
+  otorgadoPor: Autoria;
+  motivo?: string;
+  /** ISO. Sin fecha de término la atribución no vence. */
+  hasta?: string;
+}
 
 export interface UsuarioApp {
   uid: string;
   email: string;
   nombre: string;
   fotoUrl?: string;
-  // Valores antiguos ('Administrador', 'Secretaria') se migran automáticamente
-  // a 'Director' y 'Secretario' al leerse (ver normalizarRol en lib/permisos).
+  // Valores antiguos ('Administrador', 'Secretaria', 'Directiva') se migran a
+  // 'Director', 'Secretario' y 'Administrativo' al leerse (lib/permisos).
   rol: RolUsuario;
   integranteId?: string; // vínculo con su ficha en Miembros
   activo: boolean;
   fechaIngreso: string;
   ultimoAcceso?: string;
+  /**
+   * Alta de la cuenta. Las cuentas creadas antes del flujo de aprobación no lo
+   * traen y se leen como 'Aceptado'.
+   */
+  estadoIngreso?: EstadoIngreso;
+  /** Atribuciones vigentes concedidas por Dirección o Desarrollador. */
+  atribuciones?: Atribucion[];
+  /** Offer de traspaso de Dirección pendiente de respuesta. */
+  ofertaDirector?: OfertaCargo;
+}
+
+/**
+ * Traspaso del cargo de Director con ventana de respuesta: si la persona
+ * acepta dentro del plazo, asume el cargo y quien lo ofreció pasa a Miembro;
+ * si rechaza o no responde, todo queda como estaba.
+ */
+export interface OfertaCargo {
+  id: string;
+  desdeUid: string;
+  desdeNombre: string;
+  ofrecidoPor: Autoria;
+  creadaEn: string;
+  expiraEn: string;
+  estado: 'Pendiente' | 'Aceptada' | 'Rechazada' | 'Vencida' | 'Cancelada';
+  cargoOfrecido: RolUsuario;
+  cargoDeQuienOfrece: RolUsuario;
+  resueltaEn?: string;
 }
 
 export interface DocumentoAdjunto {
@@ -29,6 +123,8 @@ export interface DocumentoAdjunto {
   enlaceUrl: string; // enlace a Google Drive
   nota?: string;
   fechaCarga: string;
+  /** Quién subió el archivo. Los ayudantes quedan identificados uno a uno. */
+  subidoPor?: Autoria;
 }
 
 export type CategoriaDocumento =
@@ -46,6 +142,7 @@ export interface DocumentoInstitucional {
   descripcion?: string;
   enlaceUrl: string;
   fechaCarga: string;
+  subidoPor?: Autoria;
 }
 
 // Documentos asociados a una actividad. Viven en una colección independiente
@@ -57,6 +154,7 @@ export interface DocumentoEvento {
   titulo: string;
   enlaceUrl: string;
   fechaCarga: string;
+  subidoPor?: Autoria;
 }
 
 export interface Integrante {
@@ -73,6 +171,9 @@ export interface Integrante {
   fechaNacimiento?: string; // YYYY-MM-DD
   fotoUrl?: string; // base64 comprimido
   documentos?: DocumentoAdjunto[];
+  /** Quién creó la ficha y quién la editó por última vez. */
+  creadoPor?: Autoria;
+  editadoPor?: Autoria;
 }
 
 export interface Evento {
@@ -88,7 +189,11 @@ export interface Evento {
   cuerdasConvocadas?: Cuerda[];
   integrantesConvocadosIds?: string[];
   asistenciaFinalizada: boolean;
+  /** Quién congeló el conteo. Se discute una falta y hay que saber quién. */
+  listaCerradaPor?: Autoria;
   grupoRecurrenciaId?: string; // ID único que agrupa los eventos creados periódicamente juntos
+  creadoPor?: Autoria;
+  editadoPor?: Autoria;
 }
 
 export interface AsistenciaRegistro {
@@ -99,6 +204,8 @@ export interface AsistenciaRegistro {
   motivoJustificacion?: string;
   adjuntoUrl?: string;
   horaMarcado: string;
+  /** El paso de lista se discute cuando alguien falta: hay que saber quién lo marcó. */
+  marcadoPor?: Autoria;
 }
 
 export interface Justificacion {
@@ -110,8 +217,16 @@ export interface Justificacion {
   estado: EstadoJustificacion;
   canalIngreso: 'Secretaria_Manual' | 'Link_Autoservicio' | 'App_Integrante';
   creadoPorUid?: string;
-  vistoPor: string[]; // Lista de iniciales o nombres de directiva
+  /** Quién registró el justificativo cuando lo ingresó la directiva. */
+  creadoPorNombre?: string;
+  creadoPorRol?: string;
+  vistoPor: AcuseGuardado[];
   fechaIngreso: string;
+  // Quién aprobó o rechazó y cuándo. Sin esto, la resolución no era atribuible.
+  resueltaPorUid?: string;
+  resueltaPorNombre?: string;
+  resueltaPorRol?: string;
+  fechaResolucion?: string;
 }
 
 export interface Carta {
@@ -125,7 +240,24 @@ export interface Carta {
   archivoAdjuntoUrl?: string;
   estado: EstadoCarta;
   eventoAsociadoId?: string;
-  vistoPor: string[];
+  /** Acuses de recibo de la directiva, con nombre, cargo y hora. */
+  vistoPor: AcuseGuardado[];
+  registradaPor?: Autoria;
+  /** Última corrección del texto: Secretaría corrige y todos se enteran. */
+  ultimaEdicion?: Autoria;
+  /**
+   * Fecha de la edición que exige volver a acusar. Un acuse anterior a este
+   * momento se marca como «leído antes de la corrección».
+   */
+  reacuseDesde?: string;
+}
+
+/** Cupo de firma del acta. Los tres primeros son obligatorios para cerrarla. */
+export interface FirmaActa {
+  uid: string;
+  nombre: string;
+  rol: string;
+  fecha: string;
 }
 
 export interface Acta {
@@ -143,15 +275,28 @@ export interface Acta {
     acuerdos: string;
     fechaModificacion: string;
   };
+  /**
+   * Estado de los cupos de apertura. Dirección, Secretaría y Tesorería son
+   * obligatorios; la firma de Vocalía se suma si el Vocal quiere constar.
+   */
+  firmas?: Partial<Record<CupoFirma, FirmaActa>>;
+  // --- Campos espejo del modelo anterior, que leen las reglas de Firestore ---
   aprobadoPresidente: boolean;
   aprobadoSecretaria: boolean;
+  aprobadoTesoreria?: boolean;
+  aprobadoVocalia?: boolean;
   firmaEdicionDirectorUid?: string;
   firmaEdicionSecretarioUid?: string;
+  firmaEdicionTesoreroUid?: string;
+  firmaEdicionVocalUid?: string;
+  registradaPor?: Autoria;
+  /** Quién escribió la versión corregida después de una reapertura. */
+  editadaPor?: Autoria;
 }
 
 export interface NotificacionItem {
   id: string;
-  tipo: 'Justificacion' | 'Carta' | 'Acta' | 'Calendario' | 'Eliminacion';
+  tipo: 'Justificacion' | 'Carta' | 'Acta' | 'Calendario' | 'Eliminacion' | 'Cuenta' | 'Atribucion';
   titulo: string;
   mensaje: string;
   fecha: string;
