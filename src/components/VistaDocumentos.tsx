@@ -1,15 +1,15 @@
 'use client';
 
+import { RegistroEliminable } from './RegistroEliminable';
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { CategoriaDocumento, DocumentoInstitucional } from '@/types';
+import { CategoriaDocumento } from '@/types';
 import { esEnlaceValido, normalizarEnlace, detectarServicio, pareceEnlacePrivado } from '@/lib/enlaces';
 import {
   FileText,
   Plus,
   X,
-  Trash2,
   ExternalLink,
   AlertTriangle,
   Link2,
@@ -39,7 +39,7 @@ const ICONO_CATEGORIA: Record<CategoriaDocumento, React.ElementType> = {
 };
 
 export const VistaDocumentos: React.FC = () => {
-  const { documentos, agregarDocumento, eliminarDocumento } = useApp();
+  const { documentos, agregarDocumento } = useApp();
   const { puede } = useAuth();
 
   const [modalNuevo, setModalNuevo] = useState(false);
@@ -82,11 +82,6 @@ export const VistaDocumentos: React.FC = () => {
     setModalNuevo(false);
   };
 
-  const confirmarEliminar = (doc: DocumentoInstitucional) => {
-    if (confirm(`¿Eliminar "${doc.titulo}" del libro de documentos?`)) {
-      eliminarDocumento(doc.id);
-    }
-  };
 
   return (
     <div className="space-y-3 max-w-3xl mx-auto pb-16">
@@ -131,8 +126,8 @@ export const VistaDocumentos: React.FC = () => {
             </h3>
 
             {grupo.items.map(doc => (
+              <RegistroEliminable key={doc.id} tipo="documentos" registroId={doc.id} titulo={doc.titulo}>
               <div
-                key={doc.id}
                 className="flex items-center justify-between gap-2 p-3 bg-white rounded-xl border border-slate-200/80 hover:border-sky-300 transition-colors"
               >
                 <a
@@ -153,16 +148,8 @@ export const VistaDocumentos: React.FC = () => {
                   </span>
                 </a>
 
-                {puede('eliminar_documento') && (
-                <button
-                  onClick={() => confirmarEliminar(doc)}
-                  title="Eliminar documento"
-                  className="p-1.5 text-slate-400 hover:text-[#8B1E2B] rounded-lg hover:bg-rose-50 shrink-0"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-                )}
               </div>
+              </RegistroEliminable>
             ))}
           </div>
         );

@@ -68,6 +68,7 @@ export const activarNotificacionesPush = async (uid: string): Promise<EstadoPush
       { merge: true }
     );
 
+    void instalarEscuchaPushEnPrimerPlano();
     return 'activo';
   } catch (error) {
     console.warn('[Push] No fue posible activar las notificaciones:', error);
@@ -77,18 +78,25 @@ export const activarNotificacionesPush = async (uid: string): Promise<EstadoPush
 
 // Se usa al cerrar sesión para retirar el dispositivo de los envíos futuros.
 // No borra el permiso del navegador, que sólo la persona puede revocar.
-export const retirarNotificacionesPush = async (uid: string): Promise<void> => {
-  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY) return;
+export const retirarNotificacionesPush = async (uid: string, estricto = false): Promise<void> => {
+  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY) {
+    if (estricto) throw new Error('Servicio push no configurado.');
+    return;
+  }
   try {
     const soportado = await isSupported();
-    if (!soportado) return;
+    if (!soportado) {
+      if (estricto) throw new Error('Navegador no compatible.');
+      return;
+    }
     const registro = await obtenerRegistro();
     const token = await getToken(getMessaging(app), {
       vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
       serviceWorkerRegistration: registro
     });
     if (token) await deleteDoc(doc(db, COLECCION_DISPOSITIVOS, idSeguroDesdeToken(uid, token)));
-  } catch {
+  } catch (error) {
+    if (estricto) throw error;
     // Cerrar sesión nunca debe quedar bloqueado por una suscripción push.
   }
 };
@@ -98,21 +106,24 @@ let escuchaInstalada = false;
 // En primer plano FCM entrega el mensaje a JavaScript, no al service worker.
 // Se muestra una notificación nativa para que la experiencia sea consistente.
 export const instalarEscuchaPushEnPrimerPlano = async (): Promise<void> => {
-  if (escuchaInstalada || typeof window === 'undefined' || Notification.permission !== 'granted') return;
+  if (escuchaInstalada || typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
   if (!process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY) return;
 
   try {
     const soportado = await isSupported();
     if (!soportado) return;
+    const registro = await obtenerRegistro();
     escuchaInstalada = true;
-    onMessage(getMessaging(app), payload => {
+    onMessage(getMessaging(app), async payload => {
       const titulo = payload.notification?.title || 'Solibook';
       const opciones: NotificationOptions = {
         body: payload.notification?.body || 'Tienes un nuevo recordatorio.',
         icon: '/icon-192.png',
-        tag: payload.messageId || 'solibook-aviso'
+        tag: payload.data?.avisoId || payload.messageId || 'solibook-aviso',
+        data: { url: payload.fcmOptions?.link || '/' }
       };
-      new Notification(titulo, opciones);
+      try { await registro.showNotification(titulo, opciones); }
+      catch { console.warn('[Push] El navegador no pudo mostrar el aviso. Sigue disponible dentro de la app.'); }
     });
   } catch {
     escuchaInstalada = false;

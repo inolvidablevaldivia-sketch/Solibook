@@ -1,12 +1,16 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { EliminacionesProvider } from '@/context/EliminacionesContext';
 import { AppProvider } from '@/context/AppContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { AjustesProvider } from '@/context/AjustesContext';
+import { VistaAjustes } from '@/components/VistaAjustes';
 import { Header } from '@/components/Header';
 import { BottomNav } from '@/components/BottomNav';
 import { ModalNotificaciones } from '@/components/ModalNotificaciones';
 import { PantallaLogin } from '@/components/PantallaLogin';
+import { VistaJustificar } from '@/components/VistaJustificar';
 import { VistaInicio } from '@/components/VistaInicio';
 import { VistaAgenda, NavegacionInicialAgenda } from '@/components/VistaAgenda';
 import { VistaAsistencia } from '@/components/VistaAsistencia';
@@ -74,6 +78,19 @@ const AppShell: React.FC = () => {
     setEventoParaAsistencia(eventoId);
     navegarA('asistencia');
   };
+
+  useEffect(() => {
+    if (!usuario?.activo) return;
+    const destino = new URLSearchParams(window.location.search).get('vista');
+    if (destino !== 'agenda' && destino !== 'notificaciones') return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('vista');
+    window.history.replaceState(window.history.state, '', url);
+    queueMicrotask(() => {
+      if (destino === 'agenda') navegarA('agenda');
+      else setModalNotificacionesAbierto(true);
+    });
+  }, [usuario?.activo, navegarA]);
 
   // Cada intención de navegación hacia Agenda recibe un identificador propio
   // (contador de sesión) para que Agenda sepa que es una orden nueva.
@@ -165,6 +182,8 @@ const AppShell: React.FC = () => {
           </div>
         ) : (
           <>
+            {vistaActual === 'justificar' && <VistaJustificar volver={() => navegarA('inicio')} />}
+            {vistaActual === 'ajustes' && <VistaAjustes key={usuario.uid} volver={() => navegarA('inicio')} />}
             {vistaActual === 'inicio' && (
               <VistaInicio
                 setVistaActual={navegarA}
@@ -257,6 +276,7 @@ const AppShell: React.FC = () => {
 
       {/* Centro de Notificaciones y Acuse de Recibo */}
       <ModalNotificaciones
+        onAbrirAjustes={() => { setModalNotificacionesAbierto(false); navegarA('ajustes'); }}
         isOpen={modalNotificacionesAbierto}
         onClose={() => setModalNotificacionesAbierto(false)}
         onIrAEvento={() => navegarA('agenda')}
@@ -268,9 +288,13 @@ const AppShell: React.FC = () => {
 export default function Home() {
   return (
     <AuthProvider>
+      <AjustesProvider>
+      <EliminacionesProvider>
       <AppProvider>
         <AppShell />
       </AppProvider>
+      </EliminacionesProvider>
+      </AjustesProvider>
     </AuthProvider>
   );
 }

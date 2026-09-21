@@ -1,5 +1,6 @@
 'use client';
 
+import { RegistroEliminable } from './RegistroEliminable';
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
@@ -168,8 +169,8 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
           const yaLeido = carta.vistoPor.includes(usuarioActivo.iniciales);
 
           return (
+            <RegistroEliminable key={carta.id} tipo="cartas" registroId={carta.id} titulo={carta.asunto}>
             <div
-              key={carta.id}
               onClick={() => setCartaDetalle(carta)}
               className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs hover:border-sky-300 transition-all cursor-pointer space-y-2.5"
             >
@@ -243,6 +244,7 @@ export const VistaCartas: React.FC<VistaCartasProps> = ({ onCrearEventoDesdeCart
                 </div>
               </div>
             </div>
+            </RegistroEliminable>
           );
         })}
       </div>

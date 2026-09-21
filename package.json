@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:justificaciones": "node --test tests/justificaciones.test.mjs",
+    "test:calendario": "node --test tests/calendario.test.mjs",
+    "test:eliminaciones": "node --test tests/eliminaciones.test.mjs",
+    "test:reglas": "node --test tests/firestore.rules.test.mjs",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
@@ -20,6 +25,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/postcss": "^4",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^20",

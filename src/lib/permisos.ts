@@ -76,7 +76,7 @@ export const DESCRIPCION_ROL: Record<RolUsuario, string> = {
   Directiva:
     'Gestión de la operación, sin administrar roles, sin agregar ni eliminar miembros, sin aprobar justificaciones, sin dar acuse de recibo y sin eliminar documentos.',
   Miembro:
-    'Solo lectura del calendario: ve las próximas actividades y si está citado. El resto de la información está restringida.',
+    'Consulta el calendario y puede justificar sus propias actividades futuras donde esté citado. El resto de la información está restringida.',
   Desarrollador:
     'Soporte técnico con acceso absoluto, incluida la administración de cuentas de cualquier nivel.'
 };

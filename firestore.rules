@@ -13,8 +13,8 @@ rules_version = '2';
 //   Tesorero      → Secretario, menos: agregar/eliminar miembros y aprobar o
 //                   rechazar justificaciones.
 //   Directiva     → Tesorero, menos: dar acuse de recibo y eliminar documentos.
-//   Miembro       → solo lectura del calendario (actividades futuras y su
-//                   citación). Lee únicamente su propia ficha de integrante.
+//   Miembro       → calendario y justificaciones propias (alta por API).
+//                   Lee únicamente su propia ficha de integrante.
 //
 // Migración: los valores antiguos 'Administrador' y 'Secretaria' se tratan
 // como 'Director' y 'Secretario' mientras las cuentas se actualizan solas.
@@ -134,6 +134,19 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Alias, preferencias y lecturas: privados incluso frente a otros cargos.
+    match /usuarios/{uid}/privado/{documento} {
+      allow read, write: if activo() && request.auth.uid == uid
+        && documento in ['ajustes', 'lecturas'];
+    }
+
+    // Avisos dirigidos: solo el servidor crea el contenido. Cada cuenta lee
+    // únicamente su bandeja; las lecturas personales viven en privado/lecturas.
+    match /usuarios/{uid}/avisos/{id} {
+      allow read: if activo() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
     // ──────────────────────── Configuración ────────────────────────
 
     match /configuracion/{documento} {
@@ -161,11 +174,11 @@ service cloud.firestore {
     }
 
     match /justificaciones/{id} {
-      allow read: if esGestion();
-      // Registrar una justificación: cualquier rol de gestión. Nace como
-      // "Pendiente" (aprobarla de inmediato exige nivel superior).
-      allow create: if esGestion()
-        && (request.resource.data.estado == 'Pendiente' || esSuperior());
+      allow read: if esGestion()
+        || (activo() && perfil().integranteId == resource.data.integranteId);
+      // Los nuevos envíos pasan por /api/justificaciones: allí se verifican
+      // convocatoria, futuro, autoría y duplicados antes del commit atómico.
+      allow create: if false;
       // Editar el contenido: gestión. Cambiar su resolución (aprobar o
       // rechazar): solo nivel superior. Marcar vistoPor: quienes tienen acuse.
       allow update: if esGestion()
@@ -189,38 +202,86 @@ service cloud.firestore {
         || request.resource.data.fotoUrl.size() <= 950000;
     }
 
-    match /integrantes/{id} {
-      // Consulta puntual: gestión, o cualquier cuenta activa leyendo SU PROPIA
-      // ficha (así el Miembro sabe su cuerda y si está citado)…
-      allow get: if esGestion()
-        || (activo() && perfil().integranteId == id);
-      // …pero el listado completo del directorio queda restringido a gestión.
-      allow list: if esGestion();
-      allow create: if esSuperior() && fotoValida();
-      allow delete: if esSuperior();
-      allow update: if esGestion() && fotoValida();
+    function sinEliminacionPendiente(coleccion, id) {
+      let clave = coleccion + '__' + id;
+      return !exists(/databases/$(database)/documents/bloqueos_eliminacion/$(clave));
     }
-
+    function noEliminado(coleccion, id) {
+      let clave = coleccion + '__' + id;
+      return !exists(/databases/$(database)/documents/registros_eliminados/$(clave));
+    }
+    match /solicitudes_eliminacion/{id} {
+      allow read: if esGestion();
+      allow write: if false;
+    }
+    match /bloqueos_eliminacion/{id} {
+      allow read: if esGestion();
+      allow write: if false;
+    }
+    // Auditoría, tombstones y colas solo se escriben desde Admin en servidor.
+    // El candado final deniega acceso cliente a registros_eliminados/cola_avisos.
+    match /integrantes/{id} {
+      allow get: if esGestion() || (activo() && perfil().integranteId == id);
+      allow list: if esGestion();
+      allow create: if esSuperior() && fotoValida() && noEliminado('integrantes', id);
+      allow delete: if false;
+      allow update: if esGestion() && fotoValida() && sinEliminacionPendiente('integrantes', id);
+    }
     match /cartas/{id} {
       allow read: if esGestion();
-      allow create, delete: if esGestion();
-      // Editar: gestión; marcar vistoPor (acuse de recibo): quien corresponda.
-      allow update: if esGestion()
+      allow create: if esGestion() && noEliminado('cartas', id);
+      allow delete: if false;
+      allow update: if esGestion() && sinEliminacionPendiente('cartas', id)
+        && (request.resource.data.vistoPor == resource.data.vistoPor || tieneAcuseYEliminaDocs());
+    }
+    function firmasEdicionActaVigentes() {
+      let director = resource.data.get('firmaEdicionDirectorUid', '');
+      let secretario = resource.data.get('firmaEdicionSecretarioUid', '');
+      return director != '' && secretario != '' && director != secretario
+        && get(rutaUsuario(director)).data.activo == true
+        && get(rutaUsuario(director)).data.rol in ['Director', 'Administrador']
+        && get(rutaUsuario(secretario)).data.activo == true
+        && get(rutaUsuario(secretario)).data.rol in ['Secretario', 'Secretaria'];
+    }
+    function transicionEdicionActaValida() {
+      let nuevo = request.resource.data;
+      let anterior = resource.data;
+      let campos = nuevo.diff(anterior).affectedKeys();
+      let firmas = ['estado', 'aprobadoPresidente', 'aprobadoSecretaria', 'firmaEdicionDirectorUid', 'firmaEdicionSecretarioUid'];
+      return (
+        anterior.estado in ['Cerrada', 'Borrador'] && nuevo.estado == 'En_Solicitud_Edicion'
+        && campos.hasOnly(firmas) && nuevo.aprobadoPresidente == false && nuevo.aprobadoSecretaria == false
+        && nuevo.firmaEdicionDirectorUid == '' && nuevo.firmaEdicionSecretarioUid == ''
+      ) || (
+        anterior.estado == 'En_Solicitud_Edicion' && campos.hasOnly(firmas)
         && (
-          request.resource.data.vistoPor == resource.data.vistoPor
-          || tieneAcuseYEliminaDocs()
-        );
+          (nuevo.aprobadoPresidente == anterior.aprobadoPresidente && nuevo.get('firmaEdicionDirectorUid', '') == anterior.get('firmaEdicionDirectorUid', ''))
+          || (rolEn(['Director']) && nuevo.aprobadoPresidente == true && nuevo.firmaEdicionDirectorUid == request.auth.uid)
+        )
+        && (
+          (nuevo.aprobadoSecretaria == anterior.aprobadoSecretaria && nuevo.get('firmaEdicionSecretarioUid', '') == anterior.get('firmaEdicionSecretarioUid', ''))
+          || (rolEn(['Secretario']) && nuevo.aprobadoSecretaria == true && nuevo.firmaEdicionSecretarioUid == request.auth.uid)
+        )
+        && (nuevo.aprobadoPresidente && nuevo.aprobadoSecretaria
+          ? nuevo.estado == 'Borrador' && nuevo.firmaEdicionDirectorUid != nuevo.firmaEdicionSecretarioUid
+          : nuevo.estado == 'En_Solicitud_Edicion')
+      ) || (
+        anterior.estado == 'Borrador' && anterior.aprobadoPresidente && anterior.aprobadoSecretaria
+        && firmasEdicionActaVigentes() && nuevo.estado == 'Cerrada' && nuevo.version == anterior.version + 1
+        && campos.hasOnly(['estado', 'version', 'temasTratados', 'acuerdos', 'backupAnterior'])
+      );
     }
-
     match /actas/{id} {
-      allow read, write: if esGestion();
+      allow read: if esGestion();
+      allow create: if esGestion() && noEliminado('actas', id);
+      allow delete: if false;
+      allow update: if esGestion() && sinEliminacionPendiente('actas', id) && transicionEdicionActaValida();
     }
-
     match /documentos/{id} {
       allow read: if esGestion();
-      allow create, update: if esGestion();
-      // Eliminar documentos: fuera del alcance de Directiva.
-      allow delete: if tieneAcuseYEliminaDocs();
+      allow create: if esGestion() && noEliminado('documentos', id);
+      allow update: if esGestion() && sinEliminacionPendiente('documentos', id);
+      allow delete: if false;
     }
 
     // Adjuntos de actividades: se mantienen fuera de /eventos para que el

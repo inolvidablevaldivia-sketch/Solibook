@@ -54,6 +54,13 @@ export async function GET(request: NextRequest) {
         .filter(usuario => esRolGestion(usuario.rol))
         .map(usuario => usuario.uid)
     );
+    // Preferencias privadas: el servidor Admin puede leerlas sin exponerlas
+    // al directorio compartido ni desactivar los avisos internos.
+    const preferencias = await Promise.all([...usuariosGestion].map(async uid => {
+      const ajustes = await db.doc(`usuarios/${uid}/privado/ajustes`).get();
+      return { uid, activo: ajustes.data()?.pushTipos?.['Cumpleaños'] !== false };
+    }));
+    preferencias.filter(p => !p.activo).forEach(p => usuariosGestion.delete(p.uid));
     const dispositivos = dispositivosSnapshot.docs
       .map(documento => documento.data() as DispositivoPush)
       .filter(dispositivo => usuariosGestion.has(dispositivo.uid) && Boolean(dispositivo.token));

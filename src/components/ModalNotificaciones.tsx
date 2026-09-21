@@ -1,9 +1,10 @@
 'use client';
 
+import { SolicitudesEliminacion } from './SolicitudesEliminacion';
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { activarNotificacionesPush, EstadoPush } from '@/lib/notificacionesPush';
+import { useAjustes } from '@/context/AjustesContext';
 import {
   Bell,
   X,
@@ -14,18 +15,20 @@ import {
   XCircle,
   Eye,
   PlusCircle,
-  Clock,
-  BellRing
+  Clock
 } from 'lucide-react';
 
 interface ModalNotificacionesProps {
   isOpen: boolean;
   onClose: () => void;
+  onAbrirAjustes: () => void;
   onIrAEvento?: (eventoId: string) => void;
 }
 
-export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen, onClose, onIrAEvento }) => {
+export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen, onClose, onIrAEvento, onAbrirAjustes }) => {
   const {
+    eventos,
+    integrantes,
     notificaciones,
     marcarNotificacionLeida,
     justificaciones,
@@ -34,11 +37,10 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
     marcarCartaLeida,
     usuarioActivo
   } = useApp();
-  const { puede, usuario } = useAuth();
+  const { puede } = useAuth();
+  const { error } = useAjustes();
 
-  const [filtro, setFiltro] = useState<'Todos' | 'Justificaciones' | 'Cartas' | 'Actas'>('Todos');
-  const [estadoPush, setEstadoPush] = useState<EstadoPush | null>(null);
-  const [activandoPush, setActivandoPush] = useState(false);
+  const [filtro, setFiltro] = useState<'Todos' | 'Justificaciones' | 'Cartas' | 'Actas' | 'Calendario' | 'Eliminaciones'>('Todos');
 
   if (!isOpen) return null;
 
@@ -46,6 +48,8 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
     if (filtro === 'Todos') return true;
     if (filtro === 'Justificaciones') return n.tipo === 'Justificacion';
     if (filtro === 'Cartas') return n.tipo === 'Carta';
+    if (filtro === 'Eliminaciones') return n.tipo === 'Eliminacion';
+    if (filtro === 'Calendario') return n.tipo === 'Calendario';
     if (filtro === 'Actas') return n.tipo === 'Acta';
     return true;
   });
@@ -61,7 +65,7 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-800">Centro de Avisos y Acuse</h3>
-              <p className="text-xs text-slate-500">Justificaciones, cartas recibidas y actas</p>
+              <p className="text-xs text-slate-500">Calendario, justificaciones, cartas y actas</p>
             </div>
           </div>
           <button
@@ -74,7 +78,7 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
 
         {/* Filtros Tipo Píldora */}
         <div className="flex items-center gap-1.5 px-5 py-2.5 border-b border-slate-100 bg-white overflow-x-auto text-xs">
-          {(['Todos', 'Justificaciones', 'Cartas', 'Actas'] as const).map(f => (
+          {(['Todos', 'Justificaciones', 'Cartas', 'Actas', 'Calendario', 'Eliminaciones'] as const).map(f => (
             <button
               key={f}
               onClick={() => setFiltro(f)}
@@ -89,59 +93,28 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
           ))}
         </div>
 
-        {puede('ver_miembros') && (
-          <div className="mx-4 mt-3 p-3 rounded-xl bg-sky-50/70 border border-sky-100 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-start gap-2 min-w-0">
-              <BellRing className="w-4 h-4 text-[#0077B6] mt-0.5 shrink-0" />
-              <div>
-                <p className="text-xs font-bold text-slate-800">Recordatorios en este teléfono</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">
-                  Activa avisos de cumpleaños aunque Solibook esté cerrada.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              disabled={activandoPush || !usuario}
-              onClick={async () => {
-                if (!usuario) return;
-                setActivandoPush(true);
-                setEstadoPush(await activarNotificacionesPush(usuario.uid));
-                setActivandoPush(false);
-              }}
-              className="px-3 py-1.5 text-[11px] font-bold text-white bg-[#0077B6] hover:bg-[#0068A0] disabled:bg-slate-300 rounded-lg shrink-0"
-            >
-              {activandoPush ? 'Activando...' : estadoPush === 'activo' ? 'Avisos activos' : 'Activar avisos'}
-            </button>
-            {estadoPush && estadoPush !== 'activo' && (
-              <p className="w-full text-[10px] text-amber-800">
-                {estadoPush === 'denegado'
-                  ? 'Las notificaciones fueron bloqueadas. Habilítalas desde los ajustes del navegador o de la app.'
-                  : estadoPush === 'sin_configuracion'
-                    ? 'Falta la configuración de notificaciones push en la publicación. Revisa la guía de despliegue.'
-                    : estadoPush === 'no_soportado'
-                      ? 'Este navegador no admite avisos push.'
-                      : 'No fue posible activar los avisos. Intenta nuevamente.'}
-              </p>
-            )}
-          </div>
-        )}
+        <div className="px-5 py-3 text-xs text-slate-500">
+          <button onClick={onAbrirAjustes} className="font-semibold text-sky-700">Configurar mis notificaciones</button>
+          {error && <p role="alert" className="mt-2 text-rose-700">{error}</p>}
+        </div>
 
         {/* Lista de Contenido */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 divide-y divide-slate-100">
+          {(filtro === 'Todos' || filtro === 'Eliminaciones') && <SolicitudesEliminacion />}
           {/* Sección Dinámica: Justificaciones Pendientes */}
           {(filtro === 'Todos' || filtro === 'Justificaciones') && justificaciones.filter(j => j.estado === 'Pendiente').length > 0 && (
             <div className="pb-3">
               <h4 className="text-[11px] font-bold text-amber-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                 <Clock className="w-3.5 h-3.5" />
-                Justificaciones por Resolver
+                Justificaciones pendientes
               </h4>
               <div className="space-y-2">
                 {justificaciones.filter(j => j.estado === 'Pendiente').map(j => (
                   <div key={j.id} className="p-3 bg-amber-50/60 border border-amber-200/70 rounded-xl space-y-2">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <span className="text-xs font-semibold text-slate-800">Justificativo de Inasistencia</span>
+                        <span className="text-xs font-semibold text-slate-800">{integrantes.find(i => i.id === j.integranteId)?.nombreCompleto || 'Integrante'} · {eventos.find(e => e.id === j.eventoId)?.titulo || 'Actividad'}</span>
+                        <p className="text-xs text-slate-500">{eventos.find(e => e.id === j.eventoId)?.fechaHoraInicio && new Date(eventos.find(e => e.id === j.eventoId)!.fechaHoraInicio).toLocaleString('es-CL', { timeZone: 'America/Santiago' })}</p>
                         <p className="text-xs text-slate-600 mt-0.5">&quot;{j.motivo}&quot;</p>
                       </div>
                       <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold bg-amber-200/60 text-amber-900">
@@ -149,6 +122,7 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
                       </span>
                     </div>
 
+                    {j.adjuntoUrl && <a href={j.adjuntoUrl} target="_blank" rel="noreferrer" className="block text-xs text-sky-700"><img src={j.adjuntoUrl} alt="Foto adjunta a la justificación" className="max-h-40 rounded-lg" />Ver foto adjunta</a>}
                     <div className="flex items-center justify-between pt-1 border-t border-amber-200/40 text-[11px]">
                       <span className="text-slate-500">
                         Visto por: {j.vistoPor.length > 0 ? j.vistoPor.join(', ') : 'Nadie aún'}
@@ -264,9 +238,10 @@ export const ModalNotificaciones: React.FC<ModalNotificacionesProps> = ({ isOpen
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-slate-800">{n.titulo}</span>
-                        <span className="text-[10px] text-slate-400">{n.fecha}</span>
+                        <span className="text-[10px] text-slate-400">{Number.isFinite(Date.parse(n.fecha)) ? new Date(n.fecha).toLocaleString('es-CL', { timeZone: 'America/Santiago', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : n.fecha}</span>
                       </div>
                       <p className="text-xs text-slate-600 mt-0.5">{n.mensaje}</p>
+                      {n.tipo === 'Calendario' && n.accionId && onIrAEvento && <button onClick={e => { e.stopPropagation(); marcarNotificacionLeida(n.id); onIrAEvento(n.accionId!); onClose(); }} className="mt-2 text-xs font-semibold text-sky-700">Ver calendario</button>}
                     </div>
                   </div>
                 </div>
