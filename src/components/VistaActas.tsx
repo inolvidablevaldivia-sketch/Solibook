@@ -18,17 +18,19 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import jsPDF from 'jspdf';
+import { CUPOS_APERTURA, CUPOS_OBLIGATORIOS, ETIQUETA_CUPO, cuposFaltantes, estaFirmado, firmasDelActa, puedeEditarTrasApertura } from '@/lib/actasProtocolo';
+import { etiquetaDetalle } from '@/lib/autorias';
 
 export const VistaActas: React.FC = () => {
   const {
     actas,
     agregarActa,
     solicitarEdicionActa,
-    aprobarEdicionActa,
+    firmarCupoActa,
     guardarEdicionActa,
     deshacerEdicionActa
   } = useApp();
-  const { puede, usuario } = useAuth();
+  const { puede, puedeCupo } = useAuth();
 
   const [modalNueva, setModalNueva] = useState(false);
   const [modalEdicion, setModalEdicion] = useState<Acta | null>(null);
@@ -60,10 +62,10 @@ export const VistaActas: React.FC = () => {
       fechaReunion,
       temasTratados,
       acuerdos,
-      estado: 'Cerrada', // Cierre formal directo
-      version: 1,
-      aprobadoPresidente: true,
-      aprobadoSecretaria: true
+      // El acta nace en borrador y sin firmas: el cierre lo producen las tres
+      // firmas obligatorias, nunca el que la redacta.
+      estado: 'Borrador',
+      version: 1
     });
 
     setModalNueva(false);
@@ -141,6 +143,23 @@ export const VistaActas: React.FC = () => {
     const splitAcuerdos = doc.splitTextToSize(acta.acuerdos, 170);
     doc.text(splitAcuerdos, 20, alturaY + 13);
 
+    // Constancia de cada cupo firmado, con nombre, cargo y hora. El papel
+    // también tiene que poder auditar quién cerró el acta.
+    const firmasPdf = CUPOS_APERTURA.map(cupo => {
+      const firma = firmasDelActa(acta)[cupo];
+      return firma ? `${ETIQUETA_CUPO[cupo]}: ${etiquetaDetalle(firma)}` : `${ETIQUETA_CUPO[cupo]}: sin firmar`;
+    });
+    doc.setFontSize(8);
+    doc.setTextColor(90, 90, 90);
+    doc.text(
+      doc.splitTextToSize(
+        [acta.registradaPor ? `Redactada por: ${etiquetaDetalle(acta.registradaPor)}` : '', ...firmasPdf].filter(Boolean).join('\n'),
+        170
+      ),
+      20,
+      212
+    );
+
     // Firmas al pie
     doc.line(30, 240, 80, 240);
     doc.text('Secretaría de Actas', 37, 246);
@@ -191,7 +210,9 @@ export const VistaActas: React.FC = () => {
         {actas.map(acta => {
           const estaCerrada = acta.estado === 'Cerrada';
           const enEdicion = acta.estado === 'En_Solicitud_Edicion';
-          const listaParaEditar = acta.estado === 'Borrador' && acta.aprobadoPresidente && acta.aprobadoSecretaria && !!acta.firmaEdicionDirectorUid && !!acta.firmaEdicionSecretarioUid && acta.firmaEdicionDirectorUid !== acta.firmaEdicionSecretarioUid;
+          // Sólo se puede escribir sobre el acta si la apertura la autorizaron dos
+          // cuentas distintas (Dirección y Secretaría).
+          const listaParaEditar = acta.estado === 'Borrador' && puedeEditarTrasApertura(acta);
 
           return (
             <RegistroEliminable key={acta.id} tipo="actas" registroId={acta.id} titulo={acta.titulo}>
@@ -255,20 +276,35 @@ export const VistaActas: React.FC = () => {
                 </div>
               </div>
 
-              {/* Protocolo de Doble Firma (Presidente + Secretaría) */}
+              {/* Cupos de firma: Dirección, Secretaría y Tesorería son obligatorios;
+                  la Vocalía se suma si el Vocal quiere que su conformidad conste. */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
                 <div className="flex items-center gap-2 text-[11px] text-slate-500">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Doble Autorización:</span>
+                  <span>Firmas:</span>
+                  {CUPOS_APERTURA.map(cupo => {
+                    const firma = firmasDelActa(acta)[cupo];
+                    return (
+                      <span
+                        key={cupo}
+                        title={firma ? etiquetaDetalle(firma) : cupo === 'Vocal' ? 'Firma opcional' : 'Cupo obligatorio'}
+                        className={`px-1.5 py-0.2 rounded font-semibold text-[10px] ${
+                          firma ? 'bg-emerald-100 text-emerald-800' : cupo === 'Vocal' ? 'bg-slate-50 text-slate-400' : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        {firma ? `✓ ${ETIQUETA_CUPO[cupo]} · ${firma.nombre}` : `○ ${ETIQUETA_CUPO[cupo]}${cupo === 'Vocal' ? ' (opcional)' : ''}`}
+                      </span>
+                    );
+                  })}
+                  {acta.estado !== 'Cerrada' && cuposFaltantes(acta).length > 0 && (
+                    <span className="text-[10px] text-amber-700">falta {cuposFaltantes(acta).map(c => ETIQUETA_CUPO[c]).join(', ')}</span>
+                  )}
+                </div>
+                <div className="hidden" aria-hidden>
                   <span className={`px-1.5 py-0.2 rounded font-semibold text-[10px] ${
-                    acta.aprobadoPresidente ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'
+                    false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'
                   }`}>
-                    {acta.aprobadoPresidente ? '✓ Presidente' : '○ Presidente'}
-                  </span>
-                  <span className={`px-1.5 py-0.2 rounded font-semibold text-[10px] ${
-                    acta.aprobadoSecretaria ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'
-                  }`}>
-                    {acta.aprobadoSecretaria ? '✓ Secretaría' : '○ Secretaría'}
+                    {''}
                   </span>
                 </div>
 
@@ -277,7 +313,7 @@ export const VistaActas: React.FC = () => {
                   {(estaCerrada || (acta.estado === 'Borrador' && !listaParaEditar)) && (
                     <button
                       onClick={() => {
-                        if (confirm('El acta está cerrada bajo protocolo. ¿Deseas solicitar autorización conjunta (Presidente + Secretaria) para editarla?')) {
+                        if (confirm('El acta está cerrada bajo protocolo. ¿Pedir autorización para editarla? Deben aprobarla Dirección y Secretaría con dos cuentas distintas; el Tesorero puede pedirla pero no autorizarla.')) {
                           solicitarEdicionActa(acta.id);
                         }
                       }}
@@ -287,24 +323,26 @@ export const VistaActas: React.FC = () => {
                     </button>
                   )}
 
-                  {/* Si está en proceso de solicitud de edición */}
-                  {enEdicion && (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        disabled={usuario?.rol !== 'Director' || acta.aprobadoPresidente}
-                        onClick={() => aprobarEdicionActa(acta.id, 'Presidente')}
-                        className="px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold"
-                      >
-                        Autorizar como Director
-                      </button>
-                      <button
-                        disabled={usuario?.rol !== 'Secretario' || acta.aprobadoSecretaria}
-                        onClick={() => aprobarEdicionActa(acta.id, 'Secretaria')}
-                        className="px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold"
-                      >
-                        Autorizar como Secretaria
-                      </button>
-                      {acta.aprobadoPresidente && acta.aprobadoSecretaria && (
+                  {/* Firmar el cupo propio. Quién puede firmar qué lo decide el
+                      cargo (o la atribución concedida), y cada cuenta firma un
+                      solo cupo: así la doble firma son dos personas. */}
+                  {(enEdicion || acta.estado === 'Borrador') && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {CUPOS_APERTURA.filter(cupo => puedeCupo(cupo) && !estaFirmado(acta, cupo)).map(cupo => (
+                        <button
+                          key={cupo}
+                          onClick={() => firmarCupoActa(acta.id, cupo)}
+                          className="px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold"
+                        >
+                          {enEdicion ? 'Autorizar apertura como' : 'Firmar como'} {ETIQUETA_CUPO[cupo]}
+                        </button>
+                      ))}
+                      {enEdicion && !CUPOS_OBLIGATORIOS.some(cupo => estaFirmado(acta, cupo)) && (
+                        <span className="text-[10px] text-slate-400">
+                          Dirección y Secretaría deben autorizar la apertura
+                        </span>
+                      )}
+                      {listaParaEditar && (
                         <button
                           onClick={() => abrirEdicion(acta)}
                           className="px-2.5 py-1 bg-[#8B1E2B] text-white rounded-lg text-xs font-bold"
