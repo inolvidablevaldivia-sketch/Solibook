@@ -194,6 +194,9 @@ service cloud.firestore {
       return puede(['Director', 'Secretario', 'Administrativo'], 'gestionar_actas');
     }
 
+    // Borrar del libro de documentos exige doble firma (Dirección + Secretaría)
+    // y se ejecuta desde /api/eliminaciones; ningún cliente borra aquí.
+
     function puedeVerDocumentos() {
       return puede(['Director', 'Secretario', 'Tesorero'], 'ver_documentos');
     }
@@ -202,8 +205,6 @@ service cloud.firestore {
       return puede(['Director', 'Secretario', 'Tesorero', 'Administrativo'], 'subir_documentos');
     }
 
-    // Borrar del libro de documentos exige doble firma (Dirección + Secretaría)
-    // y se ejecuta desde /api/eliminaciones; ningún cliente borra aquí.
     function puedeFichas() {
       return puede(['Director', 'Secretario', 'Tesorero', 'Vocal', 'Administrativo'], '');
     }
