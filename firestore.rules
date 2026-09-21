@@ -67,12 +67,6 @@ service cloud.firestore {
       return get(rutaUsuario(request.auth.uid)).data;
     }
 
-    // Perfil de otra cuenta, o null si la cuenta ya no existe: así un uid vacío
-    // o borrado niega en vez de romper la evaluación de la regla.
-    function perfilDe(uidCuenta) {
-      return uidCuenta != '' && exists(rutaUsuario(uidCuenta)) ? get(rutaUsuario(uidCuenta)).data : null;
-    }
-
     // Cuenta que existe y no está suspendida. Basta para la autopista de datos
     // propios (ajustes, tokens de push, ficha propia), no para los libros.
     function activo() {
@@ -83,7 +77,7 @@ service cloud.firestore {
 
     // Cargo vigente, con los valores antiguos traducidos al vuelo.
     function rolDe(p) {
-      let r = p == null ? '' : p.get('rol', '');
+      let r = p.get('rol', '');
       return r == 'Administrador' ? 'Director'
         : r == 'Secretaria' ? 'Secretario'
         : r == 'Directiva' ? 'Administrativo'
@@ -545,6 +539,16 @@ service cloud.firestore {
         'editadaPor', 'edicionAutorizadaPor'];
     }
 
+    // Al guardar una edición autorizada se pueden tocar además los campos del
+    // texto del acta. Se escribe la lista completa: las reglas no tienen `concat`.
+    function camposDeEdicion() {
+      return ['estado', 'version', 'firmas',
+        'aprobadoPresidente', 'aprobadoSecretaria', 'aprobadoTesoreria', 'aprobadoVocalia',
+        'firmaEdicionDirectorUid', 'firmaEdicionSecretarioUid', 'firmaEdicionTesoreroUid', 'firmaEdicionVocalUid',
+        'editadaPor', 'edicionAutorizadaPor',
+        'temasTratados', 'acuerdos', 'backupAnterior', 'titulo', 'fechaReunion', 'eventoId', 'fotoManuscritaUrl'];
+    }
+
     // Los campos espejo tienen que decir lo mismo que el mapa `firmas`: sin esta
     // coherencia alguien podría marcar `aprobadoPresidente: true` sin firmar.
     function espejosCoherentes(d) {
@@ -561,9 +565,11 @@ service cloud.firestore {
 
     // ¿La cuenta indicada puede ocupar ese cupo, hoy? Por cargo o por atribución
     // concedida. Lee el documento de la otra cuenta, como hace la app.
+    // Las reglas no tienen `null` ni `if`: se lee el documento sólo si existe,
+    // con un ternario, y un uid vacío o borrado queda negado por `hay`.
     function ocupaCupo(uidCupo, cupo) {
-      let p = perfilDe(uidCupo);
-      if (p == null) return false;
+      let hay = uidCupo != '' && exists(rutaUsuario(uidCupo));
+      let p = hay ? get(rutaUsuario(uidCupo)).data : {};
       let rol = rolDe(p);
       let prestamo = cupo == 'Director' ? 'cupo_direccion'
         : cupo == 'Secretario' ? 'cupo_secretaria'
@@ -573,15 +579,18 @@ service cloud.firestore {
         : cupo == 'Secretario' ? rol == 'Secretario'
         : cupo == 'Tesorero' ? rol == 'Tesorero'
         : rol == 'Vocal';
-      return p.get('activo', false) == true
+      return hay
+        && p.get('activo', false) == true
         && (propio || atribucionVigente(p, prestamo));
     }
 
-    function firmantesDistintos(d, cupos) {
-      let uids = cupos.map(cupo -> d.get('firmas', {}).get(cupo, {}).get('uid', ''));
-      return uids.size() == 3
-        && uids[0] != '' && uids[1] != '' && uids[2] != ''
-        && uids[0] != uids[1] && uids[0] != uids[2] && uids[1] != uids[2];
+    function firmantesDistintos(d) {
+      let f = d.get('firmas', {});
+      let uno = f.get('Director', {}).get('uid', '');
+      let dos = f.get('Secretario', {}).get('uid', '');
+      let tres = f.get('Tesorero', {}).get('uid', '');
+      return uno != '' && dos != '' && tres != ''
+        && uno != dos && uno != tres && dos != tres;
     }
 
     // La firma que entra en este update es la de quien llama, y sólo en el cupo
@@ -589,25 +598,36 @@ service cloud.firestore {
     function firmaPropiaValida(d) {
       let antes = resource.data.get('firmas', {});
       let despues = d.get('firmas', {});
-      let cupos = ['Director', 'Secretario', 'Tesorero', 'Vocal'];
-      // Un solo cupo nuevo por update, y tiene que ser el del que firma.
-      let nuevos = cupos.filter(cupo -> despues.get(cupo, {}).get('uid', '') != '' && antes.get(cupo, {}).get('uid', '') == '');
-      if (nuevos.size() > 1) return false;
-      if (nuevos.size() == 0) return true;
-      let cupo = nuevos[0];
-      let firma = despues.get(cupo, {});
-      return cuentaVigente()
-        && ocupaCupo(request.auth.uid, cupo)
-        && firma.get('uid', '') == request.auth.uid
-        && !cupos.exists(otro -> otro != cupo && antes.get(otro, {}).get('uid', '') == request.auth.uid);
+      let firmante = request.auth.uid;
+      // Qué cupos se están poniendo en este update.
+      let nuevoDirector = despues.get('Director', {}).get('uid', '') != '' && antes.get('Director', {}).get('uid', '') == '';
+      let nuevoSecretario = despues.get('Secretario', {}).get('uid', '') != '' && antes.get('Secretario', {}).get('uid', '') == '';
+      let nuevoTesorero = despues.get('Tesorero', {}).get('uid', '') != '' && antes.get('Tesorero', {}).get('uid', '') == '';
+      let nuevoVocal = despues.get('Vocal', {}).get('uid', '') != '' && antes.get('Vocal', {}).get('uid', '') == '';
+      let cuantos = (nuevoDirector ? 1 : 0) + (nuevoSecretario ? 1 : 0) + (nuevoTesorero ? 1 : 0) + (nuevoVocal ? 1 : 0);
+      // Toda firma nueva tiene que ser la de quien llama.
+      let todasMias = (!nuevoDirector || despues.get('Director', {}).get('uid', '') == firmante)
+        && (!nuevoSecretario || despues.get('Secretario', {}).get('uid', '') == firmante)
+        && (!nuevoTesorero || despues.get('Tesorero', {}).get('uid', '') == firmante)
+        && (!nuevoVocal || despues.get('Vocal', {}).get('uid', '') == firmante);
+      // Y la cuenta no puede ocupar dos cupos del mismo acta.
+      let veces = (despues.get('Director', {}).get('uid', '') == firmante ? 1 : 0)
+        + (despues.get('Secretario', {}).get('uid', '') == firmante ? 1 : 0)
+        + (despues.get('Tesorero', {}).get('uid', '') == firmante ? 1 : 0)
+        + (despues.get('Vocal', {}).get('uid', '') == firmante ? 1 : 0);
+      let cupoHabil = (nuevoDirector && ocupaCupo(firmante, 'Director'))
+        || (nuevoSecretario && ocupaCupo(firmante, 'Secretario'))
+        || (nuevoTesorero && ocupaCupo(firmante, 'Tesorero'))
+        || (nuevoVocal && ocupaCupo(firmante, 'Vocal'));
+      return cuantos == 0 || (cuentaVigente() && cuantos == 1 && todasMias && veces <= 1 && cupoHabil);
     }
 
     // Qué cupo puede firmar mientras el acta está en solicitud de apertura.
     function cupoAutorizaApertura(d) {
       let antes = resource.data.get('firmas', {});
       let despues = d.get('firmas', {});
-      return ['Tesorero', 'Vocal'].exists(cupo ->
-        !(despues.get(cupo, {}).get('uid', '') != '' && antes.get(cupo, {}).get('uid', '') == ''));
+      return (antes.get('Tesorero', {}).get('uid', '') != '' || despues.get('Tesorero', {}).get('uid', '') == '')
+        && (antes.get('Vocal', {}).get('uid', '') != '' || despues.get('Vocal', {}).get('uid', '') == '');
     }
 
     function transicionEdicionActaValida() {
@@ -650,7 +670,7 @@ service cloud.firestore {
           && (
             nuevo.get('estado', '') != 'Cerrada'
             || (
-              firmantesDistintos(nuevo, ['Director', 'Secretario', 'Tesorero'])
+              firmantesDistintos(nuevo)
               && ocupaCupo(nuevo.get('firmas', {}).get('Tesorero', {}).get('uid', ''), 'Tesorero')
               && anterior.get('version', 0) + 1 >= nuevo.get('version', 0)
             )
@@ -666,7 +686,7 @@ service cloud.firestore {
           && ocupaCupo(anterior.get('firmas', {}).get('Director', {}).get('uid', ''), 'Director')
           && ocupaCupo(anterior.get('firmas', {}).get('Secretario', {}).get('uid', ''), 'Secretario')
           && anterior.get('firmas', {}).get('Director', {}).get('uid', '') != anterior.get('firmas', {}).get('Secretario', {}).get('uid', '')
-          && campos.hasOnly(camposDeFirma().concat(['temasTratados', 'acuerdos', 'backupAnterior', 'titulo', 'fechaReunion', 'eventoId', 'fotoManuscritaUrl']))
+          && campos.hasOnly(camposDeEdicion())
           && nuevo.get('version', 0) == anterior.get('version', 0) + 1
           && nuevo.get('firmas', {}).size() == 0
           && espejosCoherentes(nuevo)
@@ -699,12 +719,12 @@ service cloud.firestore {
     // y no los puede editar.
     function convocadoA(eventoId) {
       let ruta = /databases/$(database)/documents/eventos/$(eventoId);
-      if (eventoId == '' || !exists(ruta)) return false;
+      let hay = eventoId != '' && exists(ruta);
       let ficha = perfil().get('integranteId', '');
-      if (ficha == '') return false;
-      let e = get(ruta).data;
-      let cuerda = exists(rutaFicha(ficha)) ? get(rutaFicha(ficha)).data.get('cuerda', '') : '';
-      return (
+      let e = hay ? get(ruta).data : {};
+      let tieneFicha = ficha != '' && exists(rutaFicha(ficha));
+      let cuerda = tieneFicha ? get(rutaFicha(ficha)).data.get('cuerda', '') : '';
+      return hay && ficha != '' && (
         e.get('tipoConvocatoria', '') == 'Todos'
         || (e.get('tipoConvocatoria', '') == 'Por Cuerda' && e.get('cuerdasConvocadas', []).hasAny([cuerda]))
         || (e.get('tipoConvocatoria', '') == 'Personalizada' && e.get('integrantesConvocadosIds', []).hasAny([ficha]))
