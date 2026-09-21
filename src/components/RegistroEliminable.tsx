@@ -13,9 +13,13 @@ export function RegistroEliminable({ tipo, registroId, titulo, children }: { tip
   const permitido = puedeSolicitarEliminacion(usuario?.rol || '', tipo);
   const pulsacion = usePulsacionLarga(() => { if (permitido) setMenu(true); });
   const pendiente = bloqueado(tipo, registroId);
-  return <div className="relative" {...(permitido ? pulsacion.manejadores : {})} onClickCapture={e => {
-    if (pulsacion.fuePulsacionLarga()) { e.preventDefault(); e.stopPropagation(); pulsacion.reiniciar(); }
-  }}>
+  return <div
+    className={`relative ${permitido ? 'accion-mantener' : ''}`}
+    {...(permitido ? pulsacion.manejadores : {})}
+    onClickCapture={e => {
+      if (pulsacion.fuePulsacionLarga()) { e.preventDefault(); e.stopPropagation(); pulsacion.reiniciar(); }
+    }}
+  >
     {children}
     {(permitido || pendiente) && <div className="flex items-center justify-between gap-2 mt-1 px-2 text-xs">
       <span className={pendiente ? 'text-amber-800' : 'text-slate-400'}>{pendiente ? 'Eliminación pendiente · registro protegido' : 'Mantén presionado para más opciones'}</span>

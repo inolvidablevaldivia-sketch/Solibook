@@ -4,6 +4,7 @@ import { collection, doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { useAuth } from './AuthContext';
 import { puedeSolicitarEliminacion, rolEliminacion, type EntradaEliminacion, type SolicitudEliminacion, type TipoEliminacion } from '@/lib/eliminaciones';
+import { interpretarRespuestaEliminacion } from '@/lib/respuestaEliminacion';
 
 interface Valor {
   solicitudes: SolicitudEliminacion[];
@@ -53,13 +54,26 @@ function Cuenta({ children }: { children: React.ReactNode }) {
     try {
       const enviar = async (aceptarFaltaCargo = false) => {
         const respuesta = await fetch('/api/eliminaciones', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await auth.currentUser!.getIdToken()}` }, body: JSON.stringify({ ...entrada, aceptarFaltaCargo }) });
-        return { respuesta, datos: await respuesta.json() };
+        return interpretarRespuestaEliminacion(respuesta);
       };
       let resultado = await enviar();
-      if (resultado.datos.codigo === 'falta_contraparte' && confirm(resultado.datos.error)) resultado = await enviar(true);
-      if (!resultado.respuesta.ok) throw new Error(resultado.datos.error || 'No se pudo completar la operación.');
-      setMensaje(resultado.datos.mensaje);
-    } catch (e) { setMensaje(e instanceof Error ? e.message : 'No se pudo completar. Revisa Notificaciones antes de reintentar.'); }
+      // El único reintento es para confirmar la advertencia de falta de
+      // contraparte; el usuario lo autoriza explícitamente en el confirm().
+      if (resultado.codigo === 'falta_contraparte' && resultado.errorServidor && confirm(resultado.errorServidor)) {
+        resultado = await enviar(true);
+      }
+      if (resultado.ok && resultado.mensaje) {
+        setMensaje(resultado.mensaje);
+      } else {
+        setMensaje(resultado.errorServidor || 'No se pudo completar la operación. Revisa el registro en Notificaciones antes de reintentar.');
+      }
+    } catch (e) {
+      // Error de red / fetch abortado. No asumimos éxito ni fracaso de
+      // la transacción destructiva: el usuario debe revisar Notificaciones.
+      setMensaje(e instanceof Error
+        ? `No se pudo conectar con el servidor: ${e.message}. Revisa el registro en Notificaciones antes de reintentar.`
+        : 'No se pudo completar. Revisa el registro en Notificaciones antes de reintentar.');
+    }
     finally { enCurso.current = false; setOcupado(false); }
   }
   async function solicitar(tipo: TipoEliminacion, id: string, titulo: string) {
