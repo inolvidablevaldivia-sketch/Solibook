@@ -21,11 +21,12 @@ import { VistaActas } from '@/components/VistaActas';
 import { VistaDocumentos } from '@/components/VistaDocumentos';
 import { VistaUsuarios } from '@/components/VistaUsuarios';
 import { VistaDashboardPC } from '@/components/VistaDashboardPC';
-import { Loader2, Lock, LogOut } from 'lucide-react';
+import { Loader2, Lock, LogOut, Inbox, ShieldCheck } from 'lucide-react';
+import { puedeResponder } from '@/lib/traspasos';
 import { instalarEscuchaPushEnPrimerPlano } from '@/lib/notificacionesPush';
 
 const AppShell: React.FC = () => {
-  const { usuario, cargando, puede } = useAuth();
+  const { usuario, cargando, puede, enEspera, esperaMensaje, ofertaPendiente, responderOferta, cerrarSesion } = useAuth();
 
   const [vistaActual, setVistaActual] = useState<string>('inicio');
   const [eventoParaAsistencia, setEventoParaAsistencia] = useState<string | undefined>(undefined);
@@ -116,14 +117,16 @@ const AppShell: React.FC = () => {
   // Cada vista exige su permiso; si el rol no lo tiene se muestra un aviso.
   const permisoDeVista: Record<string, () => boolean> = {
     agenda: () => puede('ver_agenda'),
-    asistencia: () => puede('ver_agenda'),
+    // Pasar lista es una tarea de gestión: quien no tiene el cupo no ve la
+    // solapa, para que nadie marque asistencia «por si acaso».
+    asistencia: () => puede('pasar_lista') || puede('finalizar_lista'),
     libros: () => puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos'),
     directorio: () => puede('ver_miembros'),
     cartas: () => puede('ver_cartas'),
     actas: () => puede('ver_actas'),
     documentos: () => puede('ver_documentos'),
     dashboard: () => puede('ver_metricas'),
-    usuarios: () => puede('gestionar_usuarios')
+    usuarios: () => puede('gestionar_usuarios') || puede('ver_cuentas')
   };
 
   // Al cambiar de rol, si la vista abierta deja de estar permitida se vuelve al inicio
@@ -149,11 +152,61 @@ const AppShell: React.FC = () => {
     return <PantallaLogin />;
   }
 
+  // Una cuenta que aún no fue aceptada no lee nada del ministerio: sólo espera.
+  if (enEspera) {
+    return (
+      <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center p-5">
+        <div className="max-w-sm w-full bg-white rounded-2xl border border-slate-200/80 shadow-xs p-8 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto mb-3">
+            <Inbox className="w-5 h-5 text-amber-600" />
+          </div>
+          <h2 className="text-sm font-bold text-slate-900">Tu cuenta está en revisión</h2>
+          <p className="text-xs text-slate-500 mt-2 leading-relaxed">{esperaMensaje}</p>
+          <button
+            onClick={cerrarSesion}
+            className="mt-5 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors"
+          >
+            Cerrar sesión
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const validadorActual = permisoDeVista[vistaActual];
   const tieneAcceso = !validadorActual || validadorActual();
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col font-sans antialiased selection:bg-sky-100 selection:text-[#0077B6]">
+      {/* La Dirección fundada se ofrece una sola vez y vence en 24 horas: se
+          avisa arriba de todo para que no pase desapercibida. */}
+      {ofertaPendiente?.estado === 'Pendiente' && (
+        <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-2.5">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-emerald-900 font-medium">
+              <ShieldCheck className="w-3.5 h-3.5 inline mr-1" />
+              Te ofrecen el cargo de Dirección. Tienes 24 horas para responder.
+            </p>
+            {puedeResponder(ofertaPendiente, usuario.uid) && (
+              <span className="flex items-center gap-2">
+                <button
+                  onClick={() => responderOferta(true)}
+                  className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold rounded-lg"
+                >
+                  Aceptar
+                </button>
+                <button
+                  onClick={() => responderOferta(false)}
+                  className="px-3 py-1 bg-white border border-emerald-200 text-emerald-800 text-[11px] font-bold rounded-lg"
+                >
+                  Rechazar
+                </button>
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Cabecera Fija */}
       <Header
         vistaActual={vistaActual}

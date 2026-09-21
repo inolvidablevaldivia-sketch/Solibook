@@ -3,8 +3,15 @@ import type { Evento, Integrante } from '../types/index';
 export const MAX_EVENTOS_JUSTIFICACION = 20;
 export const MAX_FOTO_JUSTIFICACION = 200_000;
 
+
+/**
+ * Quién puede justificar a otra persona. Es el permiso `justificar_por_otros`:
+ * Tesorería lo tiene (justifica, pero no aprueba — ver `resolver_justificaciones`)
+ * y puede sumarse por atributo, por eso el chequeo del atributo se hace en el
+ * llamador, que es quien tiene la atribución a la vista.
+ */
 export function puedeJustificarPorOtros(rol: string): boolean {
-  return ['Director', 'Administrador', 'Secretario', 'Secretaria', 'Tesorero', 'Directiva', 'Desarrollador'].includes(rol);
+  return ['Director', 'Administrador', 'Secretario', 'Secretaria', 'Tesorero', 'Directiva', 'Vocal', 'Administrativo', 'Desarrollador'].includes(rol);
 }
 
 export function eventoJustificable(evento: Evento, integrante: Integrante, ahora = Date.now()): boolean {

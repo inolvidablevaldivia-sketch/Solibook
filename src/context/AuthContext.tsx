@@ -11,11 +11,11 @@ import {
   browserLocalPersistence
 } from 'firebase/auth';
 import { doc, onSnapshot, runTransaction } from 'firebase/firestore';
-import { UsuarioApp, RolUsuario, CupoFirma } from '@/types';
-import { Permiso, normalizarRol, ROLES_SUPERIORES, permisosEfectivos } from '@/lib/permisos';
+import { UsuarioApp, RolUsuario, CupoFirma, Integrante } from '@/types';
+import { Permiso, normalizarRol, ROLES_SUPERIORES } from '@/lib/permisos';
 import { puedeOcuparCupo, esAtributo, esAtributoDelicado } from '@/lib/atributos';
-import { puedeIngresar, puedeGestionarIngresos, estadoVigente, mensajeEspera } from '@/lib/ingresos';
-import { puedeResponder, textoOferta } from '@/lib/traspasos';
+import { puedeIngresar, puedeGestionarIngresos, estadoVigente, mensajeEspera, puede as puedeCuenta } from '@/lib/ingresos';
+import { textoOferta } from '@/lib/traspasos';
 import { COLECCIONES, suscribirseColeccion, guardarDocumento } from '@/lib/firestoreSync';
 import { retirarNotificacionesPush } from '@/lib/notificacionesPush';
 
@@ -57,7 +57,7 @@ interface AuthContextType {
   ofertaPendiente: UsuarioApp['ofertaDirector'];
   puedeAceptarIngresos: boolean;
   /** Aceptar un ingreso nuevo, opcionalmente vinculándolo a una ficha. */
-  aceptarIngreso: (uid: string, integranteId?: string) => void;
+  aceptarIngreso: (uid: string, opciones?: { integranteId?: string; nuevaFicha?: Omit<Integrante, 'id'> }) => void;
   rechazarIngreso: (uid: string) => void;
   otorgarAtribucion: (uid: string, atributo: string, opciones?: { hasta?: string; motivo?: string }) => string;
   revocarAtribucion: (uid: string, atributo: string) => void;
@@ -447,8 +447,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     void guardarDocumento(COLECCIONES.usuarios, uid, siguiente);
   };
 
-  const aceptarIngreso = (uid: string, integranteId?: string) => {
-    marcarIngreso(uid, { estadoIngreso: 'Aceptado', rol: 'Miembro', ...(integranteId ? { integranteId } : {}) });
+  /**
+   * Aceptar a quien llega: se deja constancia de quién aceptó y se resuelve su
+   * ficha. O se vincula a una existente (la que Secretaría creó a mano) o se crea
+   * una con los datos de la cuenta, para que nadie quede «sin ficha»: sin ficha
+   * no hay estadísticas ni asistencia.
+   */
+  const aceptarIngreso = (uid: string, opciones: { integranteId?: string; nuevaFicha?: Omit<Integrante, 'id'> } = {}) => {
+    let integranteId = opciones.integranteId;
+    if (!integranteId && opciones.nuevaFicha && usuario) {
+      integranteId = `int-${Date.now()}`;
+      const autor = { uid: usuario.uid, nombre: usuario.nombre, rol: usuario.rol, fecha: new Date().toISOString() };
+      void guardarDocumento(COLECCIONES.integrantes, integranteId, {
+        ...opciones.nuevaFicha,
+        id: integranteId,
+        creadoPor: autor,
+        editadoPor: autor
+      });
+    }
+    marcarIngreso(uid, {
+      estadoIngreso: 'Aceptado',
+      rol: 'Miembro',
+      ...(integranteId ? { integranteId } : {}),
+      ...(usuario ? { aceptadoPor: { uid: usuario.uid, nombre: usuario.nombre, rol: usuario.rol, fecha: new Date().toISOString() } } : {})
+    });
   };
 
   const rechazarIngreso = (uid: string) => {
@@ -529,12 +551,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const puede = (permiso: Permiso) => {
-    if (!usuario || !usuario.activo) return false;
-    // Una cuenta pendiente no ve datos del ministerio: sólo la espera.
-    if (!modoLocal && !puedeIngresar(usuario)) return false;
-    return permisosEfectivos(usuario.rol, usuario.atribuciones).has(permiso);
-  };
+  const puede = (permiso: Permiso) =>
+    modoLocal || puedeCuenta(usuario, permiso);
 
   const puedeCupo = (cupo: CupoFirma): boolean =>
     !!usuario && usuario.activo && puedeIngresar(usuario) && puedeOcuparCupo(usuario.rol, cupo, usuario.atribuciones);

@@ -5,7 +5,11 @@ import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { RolUsuario } from '@/types';
 import { ROLES, ROLES_SUPERIORES, DESCRIPCION_ROL, MATRIZ_PERMISOS, ETIQUETA_PERMISO } from '@/lib/permisos';
-import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut, Wrench } from 'lucide-react';
+import { LISTA_ATRIBUTOS, atribucionVigente, etiquetaAtributo, esAtributoDelicado } from '@/lib/atributos';
+import { puedeOfrecerCargo } from '@/lib/traspasos';
+import { estadoVigente } from '@/lib/ingresos';
+import { SeccionIngresos } from './SeccionIngresos';
+import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut, Wrench, Crown, X, Sparkles } from 'lucide-react';
 
 export const VistaUsuarios: React.FC = () => {
   const { integrantes, cantidadDatosDemoEnUso } = useApp();
@@ -19,8 +23,17 @@ export const VistaUsuarios: React.FC = () => {
     modoLocal,
     puede,
     puedeAdministrarCuenta,
-    esSuperAdmin
+    esSuperAdmin,
+    esFundador,
+    otorgarAtribucion,
+    revocarAtribucion,
+    ofrecerCargo
   } = useAuth();
+
+  // `ver_cuentas` deja mirar el padrón de cuentas sin tocar nada: es lo que
+  // necesita un Vocal para saber quién está activo, sin poder cambiar cargos.
+  const soloLectura = !puede('gestionar_usuarios');
+  const puedeOfrecer = puedeOfrecerCargo(usuario ?? undefined, esFundador);
 
   const esUnoMismo = (uid: string) => usuario?.uid === uid;
 
@@ -46,6 +59,15 @@ export const VistaUsuarios: React.FC = () => {
         </button>
       </div>
 
+      <SeccionIngresos />
+
+      {soloLectura && (
+        <p className="text-[11px] text-slate-500 bg-white border border-slate-200/80 rounded-2xl p-3">
+          Puedes ver las cuentas y sus cargos, no cambiarlas. Para nombrar un cargo o conceder una atribución
+          escribe a Dirección.
+        </p>
+      )}
+
       {/* Listado de usuarios */}
       <div className="space-y-2">
         {usuarios.length === 0 && (
@@ -57,6 +79,8 @@ export const VistaUsuarios: React.FC = () => {
 
         {usuarios.map(u => {
           const propio = esUnoMismo(u.uid);
+          const pendientes = estadoVigente(u) === 'Pendiente';
+          const vigentes = (u.atribuciones || []).filter(a => atribucionVigente(a));
           return (
             <div
               key={u.uid}
@@ -185,6 +209,91 @@ export const VistaUsuarios: React.FC = () => {
                   <Link2 className="w-3 h-3" />
                   Vinculado a{' '}
                   {integrantes.find(i => i.id === u.integranteId)?.nombreCompleto || 'ficha eliminada'}
+                </p>
+              )}
+
+              {u.aceptadoPor && (
+                <p className="text-[10px] text-slate-400">
+                  Aceptado por {u.aceptadoPor.nombre} ({u.aceptadoPor.rol}) ·{' '}
+                  {u.aceptadoPor.fecha ? new Date(u.aceptadoPor.fecha).toLocaleDateString('es-CL') : 'sin fecha'}
+                </p>
+              )}
+
+              {/* Atribuciones: lo que el cargo no da y se suma a pedido expreso. */}
+              <div className="border-t border-slate-100 pt-2.5 space-y-1.5">
+                <p className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                  <Sparkles className="w-3 h-3" /> Atribuciones
+                </p>
+                {vigentes.length === 0 ? (
+                  <p className="text-[10px] text-slate-400">Ninguna: actúa sólo con lo que da su cargo.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {vigentes.map(a => (
+                      <span
+                        key={a.atributo}
+                        title={`${a.otorgadoPor?.nombre || 'sin constancia'} · ${a.motivo || 'sin motivo anotado'}`}
+                        className="flex items-center gap-1 px-2 py-0.5 bg-violet-50 border border-violet-200 text-violet-800 rounded-lg text-[10px] font-semibold"
+                      >
+                        {etiquetaAtributo(a.atributo)}
+                        {a.hasta ? ` · hasta ${a.hasta}` : ''}
+                        {!soloLectura && !propio && (
+                          <button
+                            onClick={() => revocarAtribucion(u.uid, a.atributo)}
+                            title="Retirar la atribución"
+                            className="text-violet-500 hover:text-rose-600"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {!soloLectura && !propio && !pendientes && (
+                  <select
+                    value=""
+                    onChange={e => {
+                      const atributo = e.target.value;
+                      if (!atributo) return;
+                      const aviso = otorgarAtribucion(u.uid, atributo, { motivo: `Concedida por ${usuario?.nombre || 'la directiva'}` });
+                      if (aviso) alert(aviso);
+                    }}
+                    className="w-full px-2.5 py-1.5 text-[11px] border border-slate-200 rounded-xl bg-white text-slate-600"
+                  >
+                    <option value="">Sumar una atribución…</option>
+                    {LISTA_ATRIBUTOS.map(a => (
+                      <option key={a} value={a} disabled={!esSuperAdmin && esAtributoDelicado(a)}>
+                        {etiquetaAtributo(a)}
+                        {!esSuperAdmin && esAtributoDelicado(a) ? ' · solo fundador o Desarrollador' : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Traspaso de Dirección: se ofrece, el otro acepta en 24 horas. */}
+              {puedeOfrecer && !propio && u.activo && !pendientes && (
+                <button
+                  onClick={() => {
+                    if (confirm(`¿Ofrecerle la Dirección a ${u.nombre}? Queda como Director si acepta dentro de 24 horas; tú pasas a Miembro ordinario.`)) {
+                      void ofrecerCargo(u.uid).then(mensaje => { if (mensaje) alert(mensaje); });
+                    }
+                  }}
+                  className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900"
+                >
+                  <Crown className="w-3.5 h-3.5" />
+                  Ofrecerle la Dirección
+                </button>
+              )}
+              {u.ofertaDirector?.estado === 'Pendiente' && (
+                <p className="text-[10px] text-amber-700">
+                  Oferta de Dirección enviada a {u.nombre}: {u.ofertaDirector.expiraEn ? `vence el ${new Date(u.ofertaDirector.expiraEn).toLocaleString('es-CL')}` : 'pendiente'}.
+                </p>
+              )}
+              {u.ultimoTraspaso && (
+                <p className="text-[10px] text-slate-400">
+                  Última constancia de traspaso: {u.ultimoTraspaso.desdeNombre} → {u.ultimoTraspaso.haciaNombre} ·{' '}
+                  {new Date(u.ultimoTraspaso.aceptadaEn || 0).toLocaleDateString('es-CL')}
                 </p>
               )}
             </div>

@@ -1,5 +1,21 @@
 import type { Atribucion, EstadoIngreso, Integrante, UsuarioApp } from '../types/index';
+import type { Permiso } from './permisos';
 import { puedeConAtribuciones } from './permisos';
+
+/**
+ * Decisión única para cliente y servidor: ¿esta cuenta puede con este permiso?
+ * Son los permisos del cargo más las atribuciones vigentes, y exige que el
+ * ingreso esté aceptado: una cuenta pendiente no puede con nada del ministerio.
+ */
+export function puede(
+  cuenta: Partial<UsuarioApp> | null | undefined,
+  permiso: Permiso,
+  ahora = Date.now()
+): boolean {
+  if (!cuenta || cuenta.activo === false) return false;
+  if (!puedeIngresar(cuenta, ahora)) return false;
+  return puedeConAtribuciones(cuenta.rol, permiso, cuenta.atribuciones, ahora);
+}
 
 // ═══════════════════ Ingresos nuevos ═══════════════════
 // Antes, cualquiera que entraba con su cuenta de Google quedaba adentro como
@@ -12,13 +28,13 @@ export const DIAS_HASTA_VENCIMIENTO = 30;
 export const MS_HASTA_VENCIMIENTO = DIAS_HASTA_VENCIMIENTO * 24 * 60 * 60 * 1000;
 
 /** Estado de alta. Las cuentas anteriores a este flujo ya estaban aceptadas. */
-export function estadoIngreso(cuenta: Pick<UsuarioApp, 'estadoIngreso'> | undefined): EstadoIngreso {
+export function estadoIngreso(cuenta: Partial<UsuarioApp> | null | undefined): EstadoIngreso {
   return cuenta?.estadoIngreso || 'Aceptado';
 }
 
 /** Estado real, incluyendo la caducidad por fecha (sin reescribir el documento). */
 export function estadoVigente(
-  cuenta: Pick<UsuarioApp, 'estadoIngreso' | 'fechaIngreso'> | undefined,
+  cuenta: Partial<UsuarioApp> | null | undefined,
   ahora = Date.now()
 ): EstadoIngreso {
   const estado = estadoIngreso(cuenta);
@@ -27,7 +43,7 @@ export function estadoVigente(
 }
 
 export function puedeIngresar(
-  cuenta: Pick<UsuarioApp, 'estadoIngreso' | 'fechaIngreso'> | undefined,
+  cuenta: Partial<UsuarioApp> | null | undefined,
   ahora = Date.now()
 ): boolean {
   return estadoVigente(cuenta, ahora) === 'Aceptado';
@@ -49,14 +65,14 @@ export function fechaVencimiento(desdeIso: string | undefined, ahora = Date.now(
 }
 
 /** Días que quedan antes de que el pedido caduque. Negativo si ya venció. */
-export function diasRestantes(cuenta: Pick<UsuarioApp, 'fechaIngreso'>, ahora = Date.now()): number {
+export function diasRestantes(cuenta: Partial<UsuarioApp>, ahora = Date.now()): number {
   const inicio = Date.parse(cuenta.fechaIngreso || '');
   if (!Number.isFinite(inicio)) return DIAS_HASTA_VENCIMIENTO;
   return Math.ceil((inicio + MS_HASTA_VENCIMIENTO - ahora) / (24 * 60 * 60 * 1000));
 }
 
 export function estaVencidoIngreso(
-  cuenta: Pick<UsuarioApp, 'estadoIngreso' | 'fechaIngreso'>,
+  cuenta: Partial<UsuarioApp>,
   ahora = Date.now()
 ): boolean {
   if (estadoIngreso(cuenta) !== 'Pendiente') return false;

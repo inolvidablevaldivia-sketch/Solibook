@@ -76,6 +76,20 @@ export interface Atribucion {
   hasta?: string;
 }
 
+/** Constancia fechada de un traspaso de cargo ya resuelto. */
+export interface ConstanciaTraspaso {
+  id: string;
+  desdeUid: string;
+  desdeNombre: string;
+  haciaUid: string;
+  haciaNombre: string;
+  aceptadaEn: string;
+  firmadaPor: Autoria;
+  /** Cargo que tenía quien recibió antes de aceptar. */
+  rolAnteriorDestino: RolUsuario;
+  nota?: string;
+}
+
 export interface UsuarioApp {
   uid: string;
   email: string;
@@ -97,6 +111,12 @@ export interface UsuarioApp {
   atribuciones?: Atribucion[];
   /** Offer de traspaso de Dirección pendiente de respuesta. */
   ofertaDirector?: OfertaCargo;
+  /** Copia de la oferta que esta cuenta envió, para mostrar su estado. */
+  ofertaDirectorEmitida?: OfertaCargo;
+  /** Constancia del último traspaso de cargo aceptado (no se borra). */
+  ultimoTraspaso?: ConstanciaTraspaso;
+  /** Quién aceptó el ingreso de esta cuenta y cuándo. */
+  aceptadoPor?: Autoria;
 }
 
 /**

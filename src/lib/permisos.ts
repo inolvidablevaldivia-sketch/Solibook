@@ -1,7 +1,7 @@
 'use client';
 
-import { RolUsuario } from '@/types';
-import type { Atribucion } from '@/types';
+import type { Atribucion, RolUsuario } from '@/types';
+
 import { permisosPorAtribuciones } from './atributos';
 
 // Catálogo central de permisos de la aplicación.

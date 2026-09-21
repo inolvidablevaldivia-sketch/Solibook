@@ -2,6 +2,7 @@ import { after, NextResponse } from 'next/server';
 import { getAuth } from 'firebase-admin/auth';
 import { obtenerFirebaseAdmin } from '@/lib/firebaseAdmin';
 import { puedeJustificarPorOtros } from '@/lib/justificaciones';
+import { puedeSolicitarEliminacion } from '@/lib/eliminaciones';
 import { prepararAvisoGestion } from '@/lib/prepararAvisoGestion';
 import { enviarColaAvisos } from '@/lib/enviarColaAvisos';
 export const runtime = 'nodejs';
@@ -18,7 +19,9 @@ export async function POST(request: Request) {
     try { uid = (await getAuth().verifyIdToken(token, true)).uid; }
     catch { return NextResponse.json({ error: 'Sesión inválida.' }, { status: 401 }); }
     const usuario = (await db.doc(`usuarios/${uid}`).get()).data();
-    if (!usuario?.activo || !puedeJustificarPorOtros(usuario.rol)) return NextResponse.json({ error: 'Sin permiso.' }, { status: 403 });
+    // Quien avisa de un duplicado es quien justifica por otros o quien puede
+    // iniciar un pedido de borrado (el Ayudante del libro puede, y sólo avisar).
+    if (!usuario?.activo || (!puedeJustificarPorOtros(usuario.rol) && !puedeSolicitarEliminacion(usuario.rol, 'cartas', usuario.atribuciones))) return NextResponse.json({ error: 'Sin permiso.' }, { status: 403 });
     await prepararAvisoGestion(db, id);
     after(async () => { try { await enviarColaAvisos(db, messaging, `general-${id}`); } catch (e) { console.error('[Avisos] Pendiente de reintento:', e); } });
     return NextResponse.json({ ok: true });
