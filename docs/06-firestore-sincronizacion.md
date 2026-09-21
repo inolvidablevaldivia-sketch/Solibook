@@ -55,10 +55,19 @@ que su rol no permita.
 | Agregar / eliminar miembros | ✅ | ✅ | ✅ | ⛔ | ⛔ | ⛔ |
 | Aprobar / rechazar justificaciones | ✅ | ✅ | ✅ | ⛔ | ⛔ | ⛔ |
 | Administrar usuarios y roles | ✅ *(1)* | ✅ | ⛔ | ⛔ | ⛔ | ⛔ |
-| Modificar cuentas Director / Desarrollador | ⛔ | ✅ | ⛔ | ⛔ | ⛔ | ⛔ |
+| Modificar cuentas Director / Desarrollador | ⛔ *(2)* | ✅ | ⛔ | ⛔ | ⛔ | ⛔ |
 
 *(1)* El Director administra usuarios pero no puede nombrar roles Director ni
 Desarrollador.
+
+*(2)* Excepción: el **Director fundador** (rol Director cuyo uid está en
+`configuracion/estado.fundador`) opera con los permisos del Desarrollador:
+administra cualquier cuenta, nombra Directores y elimina registros sin segunda
+firma. Su rol guardado sigue siendo `Director` (así lo muestra la interfaz); la
+excepción la calculan por separado el cliente (`rolEfectivo()` en
+`AuthContext`), las reglas (`esDirectorFundador()`) y el servidor
+(`gestionarEliminacion.ts`), siempre a partir del mismo documento. Un Director
+que no es fundador no la recibe.
 
 ### Detalles clave de las reglas
 

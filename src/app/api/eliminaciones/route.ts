@@ -1,5 +1,7 @@
 import { getAuth } from 'firebase-admin/auth';
-import { NextResponse } from 'next/server';
+import type { Firestore } from 'firebase-admin/firestore';
+import type { Messaging } from 'firebase-admin/messaging';
+import { after, NextResponse } from 'next/server';
 import { obtenerFirebaseAdmin } from '@/lib/firebaseAdmin';
 import { enviarColaAvisos } from '@/lib/enviarColaAvisos';
 import { validarEliminacion } from '@/lib/eliminaciones';
@@ -8,61 +10,45 @@ import { ErrorEliminacion, gestionarEliminacion } from '@/lib/gestionarEliminaci
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-// Programar la cola de avisos sin depender de que `after()` exista en la
-// ruta del runtime. Si el helper no está disponible o falla al registrar
-// la tarea, la cola queda en Firestore y el cron / el siguiente acceso
-// la envía sin reintentar la eliminación.
-function programarCola(db: unknown, messaging: unknown, solicitudId: string) {
+// Todas las respuestas de esta ruta salen por aquí: cuerpo JSON serializado a
+// mano y encabezados explícitos. Así el cliente (interpretarRespuestaEliminacion)
+// nunca recibe un cuerpo vacío ni una página HTML del proveedor cuando algo
+// falla dentro de nuestro código.
+const ENCABEZADOS_JSON = {
+  'content-type': 'application/json; charset=utf-8',
+  'cache-control': 'no-store'
+} as const;
+
+const responderJson = (cuerpo: Record<string, unknown>, status = 200) =>
+  new NextResponse(JSON.stringify(cuerpo), { status, headers: ENCABEZADOS_JSON });
+
+const responderError = (error: string, status: number, codigo?: string) =>
+  responderJson(codigo ? { error, codigo } : { error }, status);
+
+// La cola de avisos se entrega después de responder. Si `after()` no puede
+// registrar la tarea, la cola queda en Firestore y el cron / el siguiente
+// acceso la envía sin reintentar la eliminación.
+function programarCola(db: Firestore, messaging: Messaging, solicitudId: string) {
   const ejecutar = async () => {
     try {
-      // @ts-expect-error – tipado dinámico para que una importación
-      // defectuosa no tumbe la respuesta.
       await enviarColaAvisos(db, messaging, solicitudId);
     } catch (e) {
       console.error('[Push] La cola conserva los avisos para reintentar:', e);
     }
   };
-  let after: ((fn: () => unknown) => void) | undefined;
   try {
-    // Importación dinámica: si el bundle no incluyó `after` por alguna
-    // razón (runtime edge, versión antigua, etc.) se usa setImmediate.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    after = require('next/server').after;
-  } catch { /* no disponible */ }
-  if (typeof after === 'function') {
-    try { after(ejecutar); return; }
-    catch (e) { console.warn('[Eliminaciones] after() no disponible, cola en segundo plano:', e); }
+    after(ejecutar);
+  } catch (e) {
+    console.warn('[Eliminaciones] after() no disponible, cola en segundo plano:', e);
+    void ejecutar();
   }
-  // Respaldo: no esperamos. La cola se entrega asíncronamente y el
-  // cron la recupera si el proceso se cae antes.
-  void ejecutar();
 }
 
-export async function POST(request: Request) {
-  const token = request.headers.get('authorization')?.match(/^Bearer (.+)$/)?.[1];
-  if (!token) return NextResponse.json({ error: 'Inicia sesión para continuar.' }, { status: 401 });
-
-  let db, messaging;
-  try {
-    ({ db, messaging } = obtenerFirebaseAdmin());
-  } catch (e) {
-    console.error('[Eliminaciones] Firebase Admin no está configurado:', e);
-    return NextResponse.json({ error: 'El servidor no está listo. Revisa la configuración de Firebase Admin en Vercel e inténtalo de nuevo.' }, { status: 503 });
-  }
-
-  let uid: string;
-  try {
-    uid = (await getAuth().verifyIdToken(token, true)).uid;
-  } catch {
-    return NextResponse.json({ error: 'La sesión venció. Vuelve a iniciar sesión.' }, { status: 401 });
-  }
-
-  // Leer el cuerpo de forma defensiva. request.json() falla con un error
-  // claro si el JSON es inválido; además limitamos el tamaño con un
-  // lector manual para evitar cuerpos gigantescos (ataque DoS).
+// Lee el cuerpo con un tope de tamaño (evita cuerpos gigantescos) y sin
+// depender de request.json(), que lanza errores poco claros con JSON inválido.
+async function leerCuerpo(request: Request): Promise<{ texto: string } | { respuesta: NextResponse }> {
   const lector = request.body?.getReader();
-  if (!lector) return NextResponse.json({ error: 'Falta la solicitud.' }, { status: 400 });
-  let texto: string;
+  if (!lector) return { respuesta: responderError('Falta la solicitud.', 400) };
   try {
     const partes: Uint8Array[] = [];
     let bytes = 0;
@@ -72,36 +58,76 @@ export async function POST(request: Request) {
       bytes += value.byteLength;
       if (bytes > 4096) {
         try { await lector.cancel(); } catch { /* ignorar */ }
-        return NextResponse.json({ error: 'Solicitud demasiado grande.' }, { status: 413 });
+        return { respuesta: responderError('Solicitud demasiado grande.', 413) };
       }
       partes.push(value);
     }
     const total = new Uint8Array(bytes);
     let offset = 0;
     for (const parte of partes) { total.set(parte, offset); offset += parte.byteLength; }
-    texto = Buffer.from(total).toString('utf8');
+    return { texto: Buffer.from(total).toString('utf8') };
   } catch (e) {
     console.error('[Eliminaciones] Error al leer el cuerpo:', e);
-    return NextResponse.json({ error: 'No se pudo leer la solicitud.' }, { status: 400 });
+    return { respuesta: responderError('No se pudo leer la solicitud.', 400) };
   }
+}
+
+async function procesar(request: Request): Promise<NextResponse> {
+  const token = request.headers.get('authorization')?.match(/^Bearer (.+)$/)?.[1];
+  if (!token) return responderError('Inicia sesión para continuar.', 401);
+
+  let db, messaging;
+  try {
+    ({ db, messaging } = obtenerFirebaseAdmin());
+  } catch (e) {
+    console.error('[Eliminaciones] Firebase Admin no está configurado:', e);
+    return responderError('El servidor no está listo. Revisa la configuración de Firebase Admin en Vercel e inténtalo de nuevo.', 503);
+  }
+
+  let uid: string;
+  try {
+    uid = (await getAuth().verifyIdToken(token, true)).uid;
+  } catch {
+    return responderError('La sesión venció. Vuelve a iniciar sesión.', 401);
+  }
+
+  const cuerpo = await leerCuerpo(request);
+  if ('respuesta' in cuerpo) return cuerpo.respuesta;
 
   let entrada;
   try {
-    const parseado = JSON.parse(texto || 'null');
-    entrada = validarEliminacion(parseado);
+    entrada = validarEliminacion(JSON.parse(cuerpo.texto || 'null'));
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Solicitud inválida.' }, { status: 400 });
+    return responderError(e instanceof Error ? e.message : 'Solicitud inválida.', 400);
   }
 
   try {
     const resultado = await gestionarEliminacion(db, uid, entrada);
     programarCola(db, messaging, resultado.solicitudId);
-    return NextResponse.json(resultado);
+    return responderJson(resultado);
   } catch (e) {
-    if (e instanceof ErrorEliminacion) {
-      return NextResponse.json({ error: e.message, codigo: e.codigo }, { status: e.status });
-    }
+    if (e instanceof ErrorEliminacion) return responderError(e.message, e.status, e.codigo);
     console.error('[Eliminaciones] No se pudo completar:', e);
-    return NextResponse.json({ error: 'No se pudo completar la operación. Puedes reintentar sin duplicar la solicitud.' }, { status: 500 });
+    return responderError('No se pudo completar la operación. Puedes reintentar sin duplicar la solicitud.', 500);
   }
 }
+
+export async function POST(request: Request) {
+  // Red de seguridad global: cualquier excepción no prevista (bundle, runtime,
+  // Firebase Admin, serialización) se convierte igualmente en JSON con estado
+  // 500, en lugar de la respuesta vacía que el cliente no puede interpretar.
+  try {
+    return await procesar(request);
+  } catch (e) {
+    console.error('[Eliminaciones] Error inesperado:', e);
+    return responderError('Error inesperado del servidor. Revisa el registro en Notificaciones antes de reintentar.', 500);
+  }
+}
+
+// El endpoint solo opera por POST. Los demás métodos responden igualmente en
+// JSON (405) para que una comprobación desde el navegador o un monitor nunca
+// reciba una respuesta vacía.
+export function GET() {
+  return responderJson({ error: 'Método no permitido. Usa POST con Authorization: Bearer <token>.', servicio: 'eliminaciones' }, 405);
+}
+export { GET as PUT, GET as PATCH, GET as DELETE };

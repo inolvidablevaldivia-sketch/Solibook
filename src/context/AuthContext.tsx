@@ -10,7 +10,7 @@ import {
   setPersistence,
   browserLocalPersistence
 } from 'firebase/auth';
-import { doc, runTransaction } from 'firebase/firestore';
+import { doc, onSnapshot, runTransaction } from 'firebase/firestore';
 import { UsuarioApp, RolUsuario } from '@/types';
 import { Permiso, tienePermiso, normalizarRol, ROLES_SUPERIORES } from '@/lib/permisos';
 import { COLECCIONES, suscribirseColeccion, guardarDocumento } from '@/lib/firestoreSync';
@@ -27,6 +27,16 @@ interface AuthContextType {
   error: string;
   authDisponible: boolean;
   modoLocal: boolean;
+  /** La sesión actual pertenece a la cuenta fundadora (configuracion/estado.fundador). */
+  esFundador: boolean;
+  /** La sesión actual opera con permisos de Desarrollador (rol Desarrollador o Director fundador). */
+  esSuperAdmin: boolean;
+  /**
+   * Rol con el que se evalúan los permisos de administración: el Director
+   * fundador actúa como 'Desarrollador' sin que cambie el rol guardado, que
+   * la interfaz sigue mostrando como "Director".
+   */
+  rolEfectivo: () => RolUsuario;
   iniciarSesionGoogle: () => Promise<void>;
   cerrarSesion: () => Promise<void>;
   entrarModoLocal: () => void;
@@ -69,6 +79,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authDisponible, setAuthDisponible] = useState(true);
   const [modoLocal, setModoLocal] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  // UID de la cuenta fundadora según el servidor (configuracion/estado),
+  // junto con la sesión para la que se leyó. Hasta que llega el documento (o
+  // si no se pudo leer) nadie recibe la excepción de fundador.
+  const [fundador, setFundador] = useState<{ sesion: string; uid: string }>({ sesion: '', uid: '' });
 
   // Espejo sincrónico de la lista de usuarios, necesario dentro de callbacks
   // de Firebase que no ven el estado más reciente.
@@ -127,6 +141,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => cancelar();
   }, [isLoaded, modoLocal, usuario?.uid]);
+
+  // Quién es la cuenta fundadora lo dice siempre el servidor: se escucha el
+  // mismo documento que consultan las reglas de Firestore y el endpoint de
+  // eliminaciones, así el cliente nunca decide por sí solo esa excepción.
+  const sesionUid = usuario?.uid;
+  useEffect(() => {
+    if (!isLoaded || modoLocal || !sesionUid || sesionUid === UID_MODO_LOCAL) return;
+    const cancelar = onSnapshot(
+      doc(db, 'configuracion', 'estado'),
+      snap => {
+        const valor = snap.data()?.fundador;
+        setFundador({ sesion: sesionUid, uid: typeof valor === 'string' ? valor : '' });
+      },
+      () => setFundador({ sesion: sesionUid, uid: '' })
+    );
+    return () => cancelar();
+  }, [isLoaded, modoLocal, sesionUid]);
 
   // Registra al usuario autenticado. La persona fundadora queda como Director
   // (verificado contra el servidor); los nuevos ingresan como Miembro.
@@ -286,12 +317,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem(CLAVE_SESION_LOCAL, JSON.stringify(perfil));
   };
 
-  // Quién puede tocar qué cuenta: el Desarrollador puede con cualquiera; el
-  // Director administra todas las cuentas EXCEPTO las de nivel superior
-  // (Director y Desarrollador); el resto de los roles no administra cuentas.
+  // La cuenta fundadora es la que reclamó configuracion/estado.fundador. Solo
+  // cuenta con sesión real (no en modo local) y mientras el servidor lo
+  // confirme; si el documento no llega, no hay excepción.
+  const esFundador =
+    !!usuario && !modoLocal && fundador.sesion === usuario.uid && fundador.uid !== '' && fundador.uid === usuario.uid;
+
+  // Rol con el que se deciden los permisos de administración. El Director
+  // fundador opera como Desarrollador (igual que en gestionarEliminacion.ts y
+  // en las reglas de Firestore), pero su rol guardado sigue siendo 'Director'
+  // y así lo muestra la interfaz. Un Director no fundador no gana nada.
+  const rolEfectivo = (): RolUsuario => {
+    const rol = normalizarRol(usuario?.rol);
+    return rol === 'Director' && esFundador ? 'Desarrollador' : rol;
+  };
+
+  const esSuperAdmin = !!usuario && rolEfectivo() === 'Desarrollador';
+
+  // Quién puede tocar qué cuenta: el Desarrollador (o el Director fundador)
+  // puede con cualquiera; el Director administra todas las cuentas EXCEPTO
+  // las de nivel superior (Director y Desarrollador); el resto de los roles
+  // no administra cuentas.
   const puedeAdministrarCuenta = (uid: string): boolean => {
     if (!usuario || uid === UID_MODO_LOCAL) return false;
-    const rolPropio = normalizarRol(usuario.rol);
+    const rolPropio = rolEfectivo();
     if (rolPropio === 'Desarrollador') return true;
     if (rolPropio !== 'Director') return false;
     const objetivo = usuariosRef.current.find(u => u.uid === uid);
@@ -303,8 +352,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const cambiarRol = (uid: string, rol: RolUsuario) => {
     if (usuario?.uid === uid) return;
     if (!puedeAdministrarCuenta(uid)) return;
-    // Solo el Desarrollador puede nombrar cuentas de nivel superior
-    if (normalizarRol(usuario?.rol) !== 'Desarrollador' && ROLES_SUPERIORES.includes(rol)) return;
+    // Solo el Desarrollador (o el Director fundador) puede nombrar cuentas de
+    // nivel superior; un Director no fundador sigue sin poder nombrar Directores.
+    if (rolEfectivo() !== 'Desarrollador' && ROLES_SUPERIORES.includes(rol)) return;
     const actual = usuariosRef.current.find(u => u.uid === uid);
     setUsuarios(prev => prev.map(u => (u.uid === uid ? { ...u, rol } : u)));
     if (actual) {
@@ -345,6 +395,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error,
         authDisponible,
         modoLocal,
+        esFundador,
+        esSuperAdmin,
+        rolEfectivo,
         iniciarSesionGoogle,
         cerrarSesion,
         entrarModoLocal,

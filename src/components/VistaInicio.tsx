@@ -134,9 +134,6 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({
 
   return (
     <div className="space-y-4 max-w-3xl lg:max-w-6xl mx-auto pb-20">
-      <button onClick={() => setVistaActual('justificar')} className="w-full flex items-center justify-between gap-3 bg-sky-600 hover:bg-sky-700 text-white rounded-2xl p-4 text-left shadow-sm">
-        <span className="flex gap-3 items-center"><FileText className="w-6 h-6" /><span><strong className="block">Justificar</strong><span className="text-xs text-sky-100">Avisar inasistencia a una o varias actividades</span></span></span><ChevronRight className="w-5 h-5" />
-      </button>
       {/* Próxima actividad */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 space-y-3">
         <h2 className="text-sm font-bold text-slate-900">Inicio</h2>
@@ -389,6 +386,22 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({
           </div>
         )}
       </div>
+
+      {/* Justificar: cierra la pantalla, después de Pendientes, para que lo
+          primero que se vea al entrar sea la próxima actividad. */}
+      <button
+        onClick={() => setVistaActual('justificar')}
+        className="w-full flex items-center justify-between gap-3 bg-sky-600 hover:bg-sky-700 text-white rounded-2xl p-4 text-left shadow-sm"
+      >
+        <span className="flex gap-3 items-center">
+          <FileText className="w-6 h-6" />
+          <span>
+            <strong className="block">Justificar</strong>
+            <span className="text-xs text-sky-100">Avisar inasistencia a una o varias actividades</span>
+          </span>
+        </span>
+        <ChevronRight className="w-5 h-5" />
+      </button>
     </div>
   );
 };
