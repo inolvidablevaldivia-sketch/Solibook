@@ -70,7 +70,7 @@ const FilaMiembro: React.FC<FilaMiembroProps> = ({
       <button
         {...pulsacion.manejadores}
         onClick={handleClick}
-        className="w-full flex items-center gap-3 px-3 py-2 bg-white rounded-xl border border-slate-200/80 hover:border-sky-300 transition-colors text-left select-none [-webkit-touch-callout:none]"
+        className="accion-mantener w-full flex items-center gap-3 px-3 py-2 bg-white rounded-xl border border-slate-200/80 hover:border-sky-300 transition-colors text-left"
       >
         {item.fotoUrl ? (
           <img
