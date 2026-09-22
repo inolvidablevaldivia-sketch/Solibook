@@ -9,10 +9,10 @@ import { LISTA_ATRIBUTOS, atribucionVigente, etiquetaAtributo, esAtributoDelicad
 import { puedeOfrecerCargo } from '@/lib/traspasos';
 import { estadoVigente } from '@/lib/ingresos';
 import { SeccionIngresos } from './SeccionIngresos';
-import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut, Wrench, Crown, X, Sparkles } from 'lucide-react';
+import { Users, ShieldCheck, UserX, UserCheck, Link2, Ban, LogOut, Crown, X, Sparkles } from 'lucide-react';
 
 export const VistaUsuarios: React.FC = () => {
-  const { integrantes, cantidadDatosDemoEnUso } = useApp();
+  const { integrantes } = useApp();
   const {
     usuario,
     usuarios,
@@ -339,33 +339,6 @@ export const VistaUsuarios: React.FC = () => {
         </div>
       </div>
 
-      {/* Mantenimiento: la app ya no trae datos de ejemplo, pero los equipos
-          que sincronizaron la demostración antigua necesitan retirarla. */}
-      {puede('gestionar_usuarios') && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100">
-            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-slate-500" />
-              Mantenimiento
-            </h3>
-            <p className="text-xs text-slate-400 mt-0.5">Datos de demostración</p>
-          </div>
-          <div className="p-4 space-y-3">
-            <p className="text-[11px] text-slate-500 leading-relaxed">
-              La limpieza masiva anterior se retiró para no saltarse las autorizaciones.
-              Para eliminar registros de ejemplo, usa Eliminar desde el libro correspondiente;
-              se aplican las mismas firmas y excepciones que a los demás registros.
-            </p>
-            <div className="flex flex-wrap items-center gap-2.5">
-              {cantidadDatosDemoEnUso > 0 && (
-                <span className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg">
-                  {cantidadDatosDemoEnUso} en pantalla
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
