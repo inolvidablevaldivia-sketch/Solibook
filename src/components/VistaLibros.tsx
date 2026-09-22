@@ -5,9 +5,11 @@ import { VistaDirectorio } from './VistaDirectorio';
 import { VistaCartas } from './VistaCartas';
 import { VistaActas } from './VistaActas';
 import { VistaDocumentos } from './VistaDocumentos';
-import { Users, Mail, FileText, FolderOpen, ChevronLeft, ChevronRight, BookOpen } from 'lucide-react';
+import { VistaJustificaciones } from './VistaJustificaciones';
+import { useAuth } from '@/context/AuthContext';
+import { Users, Mail, FileText, FolderOpen, ChevronLeft, ChevronRight, BookOpen, ClipboardList } from 'lucide-react';
 
-type LibroId = 'miembros' | 'cartas' | 'actas' | 'documentos';
+type LibroId = 'miembros' | 'cartas' | 'actas' | 'documentos' | 'justificaciones';
 
 interface LibroDefinicion {
   id: LibroId;
@@ -40,6 +42,12 @@ const LIBROS: LibroDefinicion[] = [
     titulo: 'Documentos',
     descripcion: 'Constitución, situación tributaria, cuentas bancarias y reglamentos.',
     icon: FolderOpen
+  },
+  {
+    id: 'justificaciones',
+    titulo: 'Justificaciones',
+    descripcion: 'Padrón de pendientes e historial, con quien envió y quien resolvió.',
+    icon: ClipboardList
   }
 ];
 
@@ -49,7 +57,9 @@ interface VistaLibrosProps {
 
 // Sección Libros: un índice único que agrupa los cuatro libros del ministerio.
 export const VistaLibros: React.FC<VistaLibrosProps> = ({ onCrearEventoDesdeCarta }) => {
+  const { puede } = useAuth();
   const [libroAbierto, setLibroAbierto] = useState<LibroId | null>(null);
+  const librosVisibles = LIBROS.filter(libro => libro.id !== 'justificaciones' || puede('ver_justificaciones'));
 
   if (libroAbierto) {
     const definicion = LIBROS.find(l => l.id === libroAbierto)!;
@@ -69,6 +79,7 @@ export const VistaLibros: React.FC<VistaLibrosProps> = ({ onCrearEventoDesdeCart
         )}
         {libroAbierto === 'actas' && <VistaActas />}
         {libroAbierto === 'documentos' && <VistaDocumentos />}
+        {libroAbierto === 'justificaciones' && <VistaJustificaciones />}
       </div>
     );
   }
@@ -86,7 +97,7 @@ export const VistaLibros: React.FC<VistaLibrosProps> = ({ onCrearEventoDesdeCart
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {LIBROS.map(libro => {
+        {librosVisibles.map(libro => {
           const Icon = libro.icon;
           return (
             <button

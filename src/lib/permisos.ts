@@ -13,6 +13,7 @@ export type Permiso =
   | 'pasar_lista'
   | 'finalizar_lista'
   | 'gestionar_justificaciones' // registrar/corregir justificaciones
+  | 'ver_justificaciones' // padrón completo de justificaciones
   | 'resolver_justificaciones' // aprobar o rechazar
   | 'ver_miembros'
   | 'crear_miembro'
@@ -40,6 +41,7 @@ export const PERMISOS: Permiso[] = [
   'pasar_lista',
   'finalizar_lista',
   'gestionar_justificaciones',
+  'ver_justificaciones',
   'resolver_justificaciones',
   'ver_miembros',
   'crear_miembro',
@@ -109,7 +111,8 @@ const VOCAL: Permiso[] = SIN_LIBRO_DOCUMENTOS.filter(
     p !== 'gestionar_actas' &&
     p !== 'eliminar_miembro' &&
     p !== 'ver_cuentas' &&
-    p !== 'aprobar_ingresos'
+    p !== 'aprobar_ingresos' &&
+    p !== 'ver_justificaciones'
 );
 
 /** El Tesorero mira, acusa y firma; la operación diaria es de Secretariado. */
@@ -204,6 +207,7 @@ export const ETIQUETA_PERMISO: Record<Permiso, string> = {
   pasar_lista: 'Pasar lista',
   finalizar_lista: 'Finalizar lista',
   gestionar_justificaciones: 'Registrar justificaciones',
+  ver_justificaciones: 'Ver padrón de justificaciones',
   resolver_justificaciones: 'Aprobar o rechazar justificaciones',
   ver_miembros: 'Ver miembros',
   crear_miembro: 'Crear miembro',

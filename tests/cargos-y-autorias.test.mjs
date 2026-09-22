@@ -50,15 +50,18 @@ test('cada cargo tiene exactamente lo acordado, sin depender del nombre guardado
 
   // Dirección y Desarrollador mandan en todo; Secretaría no administra cuentas.
   assert.equal(tiene('Director', 'gestionar_usuarios'), true);
+  assert.equal(tiene('Director', 'ver_justificaciones'), true);
   assert.equal(tiene('Desarrollador', 'gestionar_usuarios'), true);
+  assert.equal(tiene('Desarrollador', 'ver_justificaciones'), true);
   assert.equal(tiene('Secretario', 'gestionar_usuarios'), false);
   assert.equal(tiene('Secretario', 'gestionar_cartas'), true);
+  assert.equal(tiene('Secretario', 'ver_justificaciones'), true);
 
   // Tesorería mira, acusa y lleva su libro; no toca agenda, listas ni métricas.
   for (const permiso of ['ver_agenda', 'ver_cartas', 'acuse_recibo', 'ver_documentos', 'gestionar_documentos', 'crear_miembro', 'gestionar_justificaciones']) {
     assert.equal(tiene('Tesorero', permiso), true, `Tesorero debe tener ${permiso}`);
   }
-  for (const permiso of ['crear_evento', 'eliminar_evento', 'pasar_lista', 'finalizar_lista', 'ver_metricas', 'exportar_datos', 'gestionar_actas', 'gestionar_cartas', 'resolver_justificaciones', 'eliminar_miembro', 'gestionar_usuarios', 'ver_cuentas', 'aprobar_ingresos']) {
+  for (const permiso of ['crear_evento', 'eliminar_evento', 'pasar_lista', 'finalizar_lista', 'ver_metricas', 'exportar_datos', 'gestionar_actas', 'gestionar_cartas', 'resolver_justificaciones', 'ver_justificaciones', 'eliminar_miembro', 'gestionar_usuarios', 'ver_cuentas', 'aprobar_ingresos']) {
     assert.equal(tiene('Tesorero', permiso), false, `Tesorero no debe tener ${permiso}`);
   }
 
@@ -67,7 +70,7 @@ test('cada cargo tiene exactamente lo acordado, sin depender del nombre guardado
   for (const permiso of ['crear_evento', 'eliminar_evento', 'finalizar_lista', 'resolver_justificaciones', 'acuse_recibo', 'ver_actas', 'ver_metricas']) {
     assert.equal(tiene('Vocal', permiso), true, `Vocal debe tener ${permiso}`);
   }
-  for (const permiso of ['gestionar_usuarios', 'ver_cuentas', 'aprobar_ingresos', 'gestionar_cartas', 'gestionar_actas', 'ver_documentos', 'eliminar_miembro']) {
+  for (const permiso of ['gestionar_usuarios', 'ver_cuentas', 'aprobar_ingresos', 'gestionar_cartas', 'gestionar_actas', 'ver_documentos', 'eliminar_miembro', 'ver_justificaciones']) {
     assert.equal(tiene('Vocal', permiso), false, `Vocal no debe tener ${permiso}`);
   }
 
@@ -75,7 +78,7 @@ test('cada cargo tiene exactamente lo acordado, sin depender del nombre guardado
   for (const permiso of ['crear_evento', 'pasar_lista', 'gestionar_cartas', 'gestionar_actas', 'gestionar_documentos', 'crear_miembro']) {
     assert.equal(tiene('Administrativo', permiso), true, `Administrativo debe tener ${permiso}`);
   }
-  for (const permiso of ['finalizar_lista', 'eliminar_evento', 'acuse_recibo', 'resolver_justificaciones', 'eliminar_documento', 'eliminar_miembro', 'ver_metricas', 'ver_cuentas', 'gestionar_usuarios']) {
+  for (const permiso of ['finalizar_lista', 'eliminar_evento', 'acuse_recibo', 'resolver_justificaciones', 'ver_justificaciones', 'eliminar_documento', 'eliminar_miembro', 'ver_metricas', 'ver_cuentas', 'gestionar_usuarios']) {
     assert.equal(tiene('Administrativo', permiso), false, `Administrativo no debe tener ${permiso}`);
   }
 
@@ -92,6 +95,15 @@ test('los cargos guardados antes del modelo siguen funcionando', () => {
 });
 
 // ─────────────────────── Las atribuciones sólo suman ───────────────────────
+
+test('ver_justificaciones se puede prestar a Vocal o Administrativo y no es delicada', () => {
+  assert.equal(atributos.esAtributoDelicado('ver_justificaciones'), false);
+  assert.equal(atributos.etiquetaAtributo('ver_justificaciones'), 'Ver padrón de justificaciones');
+  assert.equal(permisos.permisosEfectivos('Vocal', []).has('ver_justificaciones'), false);
+  assert.equal(permisos.permisosEfectivos('Vocal', [{ atributo: 'ver_justificaciones', otorgadoPor: { uid: 'f' } }]).has('ver_justificaciones'), true);
+  assert.equal(permisos.permisosEfectivos('Administrativo', [{ atributo: 'ver_justificaciones', otorgadoPor: { uid: 'f' } }]).has('ver_justificaciones'), true);
+  assert.equal(permisos.permisosEfectivos('Administrativo', [{ atributo: 'ver_justificaciones', otorgadoPor: { uid: 'f' } }]).has('resolver_justificaciones'), false);
+});
 
 test('una atribución suma permisos y nunca resta los del cargo', () => {
   const antes = permisos.permisosEfectivos('Administrativo', []);

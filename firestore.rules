@@ -403,9 +403,15 @@ service cloud.firestore {
     }
 
     // ──────────────────────── Justificativos ────────────────────────
+    // El padrón (ver_justificaciones) lo leen Dirección, Secretaría y
+    // Desarrollador por cargo, o quien reciba la atribución. esGestion() ya
+    // cubre esos cargos y también a Vocal/Tesorería/Ayudante: la atribución
+    // no abre un agujero nuevo. El borrado limpio del fundador va por
+    // /api/mantenimiento (Admin SDK), no por estas reglas.
 
     match /justificaciones/{id} {
       allow read: if esGestion()
+        || (cuentaVigente() && tieneAtribucion('ver_justificaciones'))
         || (activo() && perfil().get('integranteId', '') != ''
              && perfil().get('integranteId', '') == resource.data.get('integranteId', ''));
       // Los envíos nuevos pasan por /api/justificaciones: allí se verifican
@@ -757,6 +763,8 @@ service cloud.firestore {
     // usuarios/{uid}/avisos. Las lecturas personales viven en privado/lecturas.
     match /notificaciones/{id} {
       allow read, write: if esGestion();
+      // El borrado limpio (huérfanas o cascada del fundador) va por
+      // /api/mantenimiento con Admin SDK. El cliente no borra avisos.
       allow delete: if false;
     }
 

@@ -27,6 +27,7 @@ export type Atributo =
   | 'subir_documentos'
   | 'acuse_recibo'
   | 'resolver_justificaciones'
+  | 'ver_justificaciones'
   | 'ver_metricas'
   | 'ver_cuentas'
   | 'solicitar_borrados'
@@ -106,6 +107,12 @@ export const ATRIBUCIONES: Record<Atributo, DefinicionAtributo> = {
     etiqueta: 'Aprobar o rechazar justificativos',
     descripcion: 'Cerrar la solicitud de un hermano. La resolución queda firmada.',
     permisos: ['resolver_justificaciones'],
+    delicada: false
+  },
+  ver_justificaciones: {
+    etiqueta: 'Ver padrón de justificaciones',
+    descripcion: 'Lee el padrón completo (pendientes e historial) sin poder resolverlas por sí sola.',
+    permisos: ['ver_justificaciones'],
     delicada: false
   },
   ver_metricas: {

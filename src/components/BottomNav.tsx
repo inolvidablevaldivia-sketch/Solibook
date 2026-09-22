@@ -40,7 +40,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ vistaActual, setVistaActua
     (tab.id === 'agenda' && puede('ver_agenda')) ||
     (tab.id === 'asistencia' && (puede('pasar_lista') || puede('finalizar_lista'))) ||
     (tab.id === 'libros' &&
-      (puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos'))) ||
+      (puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos') || puede('ver_justificaciones'))) ||
     (tab.id === 'dashboard' && puede('ver_metricas')) ||
     (tab.id === 'usuarios' && (puede('gestionar_usuarios') || puede('ver_cuentas')))
   ) as TabDefinicion[];
