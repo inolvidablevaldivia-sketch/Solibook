@@ -285,7 +285,7 @@ service cloud.firestore {
              type(a) == 'string'
              || (a.get('atributo', '') in ['gestionar_agenda', 'eliminar_agenda', 'gestionar_listas', 'cerrar_listas',
                'gestionar_cartas', 'gestionar_actas', 'ver_documentos', 'subir_documentos', 'acuse_recibo',
-               'resolver_justificaciones', 'ver_metricas', 'ver_cuentas', 'solicitar_borrados', 'eliminar_documento',
+               'resolver_justificaciones', 'ver_justificaciones', 'ver_metricas', 'ver_cuentas', 'solicitar_borrados', 'eliminar_documento',
                'eliminar_ficha', 'cupo_direccion', 'cupo_secretaria', 'cupo_tesoreria']
                && a.get('otorgadoPor', {}).get('uid', '') != ''));
     }
