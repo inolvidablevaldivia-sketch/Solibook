@@ -13,7 +13,8 @@ import {
   BookOpen,
   Home,
   LayoutDashboard,
-  Building2
+  Building2,
+  Wrench
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -24,7 +25,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActual, setVistaActual }) => {
   const { notificaciones } = useApp();
-  const { usuario, puede } = useAuth();
+  const { usuario, puede, esSuperAdmin } = useAuth();
 
   const { ajustes } = useAjustes();
   const noLeidas = notificaciones.filter(n => !n.leido).length;
@@ -42,7 +43,7 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
     (item.id === 'agenda' && puede('ver_agenda')) ||
     (item.id === 'asistencia' && (puede('pasar_lista') || puede('finalizar_lista'))) ||
     (item.id === 'libros' &&
-      (puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos'))) ||
+      (puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos') || puede('ver_justificaciones'))) ||
     (item.id === 'dashboard' && puede('ver_metricas'))
   );
 
@@ -99,6 +100,20 @@ export const Header: React.FC<HeaderProps> = ({ onAbrirNotificaciones, vistaActu
             >
               <Building2 className="w-3.5 h-3.5" />
               {puede('gestionar_usuarios') ? 'Usuarios' : 'Cuentas'}
+            </button>
+          )}
+
+          {esSuperAdmin && (
+            <button
+              onClick={() => setVistaActual('mantenimiento')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                vistaActual === 'mantenimiento'
+                  ? 'bg-white text-slate-900 font-semibold shadow-xs'
+                  : 'hover:text-slate-900'
+              }`}
+            >
+              <Wrench className="w-3.5 h-3.5" />
+              Mantenimiento
             </button>
           )}
         </nav>
