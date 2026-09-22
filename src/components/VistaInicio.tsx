@@ -307,7 +307,7 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({
         {/* Justificaciones por resolver */}
         {justificacionesPendientes.length > 0 && (
           <button
-            onClick={() => setVistaActual('asistencia')}
+            onClick={() => setVistaActual(puede('ver_justificaciones') ? 'justificaciones' : 'asistencia')}
             className="w-full flex items-center justify-between gap-3 p-3 rounded-xl border border-amber-100 bg-amber-50/40 hover:border-amber-300 transition-colors text-left"
           >
             <div className="flex items-center gap-2 min-w-0">
@@ -317,7 +317,9 @@ export const VistaInicio: React.FC<VistaInicioProps> = ({
                   {justificacionesPendientes.length}{' '}
                   {justificacionesPendientes.length === 1 ? 'justificación' : 'justificaciones'} por resolver
                 </span>
-                <span className="text-[10px] text-slate-500">Revisar y aprobar desde el paso de lista</span>
+                <span className="text-[10px] text-slate-500">
+                  {puede('ver_justificaciones') ? 'Revisar el padrón de justificaciones' : 'Revisar y aprobar desde el paso de lista'}
+                </span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />

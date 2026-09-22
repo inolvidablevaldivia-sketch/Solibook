@@ -21,12 +21,14 @@ import { VistaActas } from '@/components/VistaActas';
 import { VistaDocumentos } from '@/components/VistaDocumentos';
 import { VistaUsuarios } from '@/components/VistaUsuarios';
 import { VistaDashboardPC } from '@/components/VistaDashboardPC';
+import { VistaJustificaciones } from '@/components/VistaJustificaciones';
+import { VistaMantenimiento } from '@/components/VistaMantenimiento';
 import { Loader2, Lock, LogOut, Inbox, ShieldCheck } from 'lucide-react';
 import { puedeResponder } from '@/lib/traspasos';
 import { instalarEscuchaPushEnPrimerPlano } from '@/lib/notificacionesPush';
 
 const AppShell: React.FC = () => {
-  const { usuario, cargando, puede, enEspera, esperaMensaje, ofertaPendiente, responderOferta, cerrarSesion } = useAuth();
+  const { usuario, cargando, puede, esSuperAdmin, enEspera, esperaMensaje, ofertaPendiente, responderOferta, cerrarSesion } = useAuth();
 
   const [vistaActual, setVistaActual] = useState<string>('inicio');
   const [eventoParaAsistencia, setEventoParaAsistencia] = useState<string | undefined>(undefined);
@@ -120,7 +122,7 @@ const AppShell: React.FC = () => {
     // Pasar lista es una tarea de gestión: quien no tiene el cupo no ve la
     // solapa, para que nadie marque asistencia «por si acaso».
     asistencia: () => puede('pasar_lista') || puede('finalizar_lista'),
-    libros: () => puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos'),
+    libros: () => puede('ver_miembros') || puede('ver_cartas') || puede('ver_actas') || puede('ver_documentos') || puede('ver_justificaciones'),
     directorio: () => puede('ver_miembros'),
     cartas: () => puede('ver_cartas'),
     actas: () => puede('ver_actas'),
@@ -281,7 +283,9 @@ const AppShell: React.FC = () => {
             )}
             {vistaActual === 'actas' && <VistaActas />}
             {vistaActual === 'documentos' && <VistaDocumentos />}
+            {vistaActual === 'justificaciones' && <VistaJustificaciones />}
             {vistaActual === 'usuarios' && <VistaUsuarios />}
+            {vistaActual === 'mantenimiento' && <VistaMantenimiento />}
           </>
         )}
       </main>
