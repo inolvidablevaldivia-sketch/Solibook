@@ -14,8 +14,8 @@ export function RegistroEliminable({ tipo, registroId, titulo, children }: { tip
   const pulsacion = usePulsacionLarga(() => { if (permitido) setMenu(true); });
   const pendiente = bloqueado(tipo, registroId);
   return <div
-    className={`relative ${permitido ? 'accion-mantener' : ''}`}
-    {...(permitido ? pulsacion.manejadores : {})}
+    className="relative accion-mantener"
+    {...pulsacion.manejadores}
     onClickCapture={e => {
       if (pulsacion.fuePulsacionLarga()) { e.preventDefault(); e.stopPropagation(); pulsacion.reiniciar(); }
     }}
